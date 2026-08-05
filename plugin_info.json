@@ -1,0 +1,10 @@
+{
+    "name": "MiniMax H3 Prompt Builder",
+    "version": "1.0.0",
+    "description": "Builds MiniMax H3 prompts in the official format: three named fields for the base modes (T2VA/I2VA/FL2VA/L2VA) and six for full-reference mode. Handles mode instruction lines, shot timestamps, speaker IDs, dialogue tags, retention markers and task-type prefixes.",
+    "author": "JedsDeadBaby",
+    "date": "2026-08-02",
+    "type": "extension",
+    "url": "https://github.com/JedsDeadBaby/wan2gp-h3-prompt-builder",
+    "wan2gp_version": "12.42"
+}

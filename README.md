@@ -203,4 +203,4 @@ adds components at load time — lower them if the panel feels slow to open.
 
 ## Licence
 
-MIT
+Apache 2.0

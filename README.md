@@ -74,6 +74,12 @@ shows only the sections that mode can use.
 A **source video** section appears for FL2VA (continuing a clip) and Ref2VA
 (where it becomes a `<Video N>` reference).
 
+Its picture and audio are marked separately, because they use different marker
+sets. Set **Retention (audio)** only if you're reusing or referencing the
+source's sound — it emits its own `<Audio N>` label and pairs with the
+`audio reuse` or `audio reference` task type. Leave it blank and no audio entry
+is written, so the voice comes from the Cast settings instead.
+
 ---
 
 ## Sections
@@ -142,7 +148,17 @@ Music playing on-screen from a radio, an instrument or a phone is diegetic and
 belongs in a beat, not in the music field. Both fields have preset dropdowns
 that combine with anything you type.
 
+### Reference task (Ref2VA)
+
+Task type and summary. Needed for **every** reference prompt, including ones
+with no subjects — which is why they sit in their own section rather than inside
+the subjects one.
+
 ### Reference subjects (Ref2VA)
+
+Optional. Only needed when something comes from a reference asset — generating a
+character from description alone needs no entry here, just a description in the
+shot anchor.
 
 One entry per thing a reference contributes. A location is a **Subject**, same
 as a person — the label covers any reusable visible content. An image used only
@@ -200,8 +216,12 @@ adds components at load time — lower them if the panel feels slow to open.
   actual reference slots — `Picture 1` must really be in slot 1.
 - Voiceover has required phrasing in the spec, including a follow-up clause
   about the speaker's lips, which isn't generated yet.
-- The `summary` section in reference mode is the weakest template. Treat it as
-  a draft and edit it.
+- The `summary` section in reference mode is written by you, not generated —
+  the other five sections have enough structure to template reliably, this one
+  doesn't.
+- There's no way to keep the source video's spoken words while replacing the
+  voice. `audio reuse` brings the original voice along with the words, and
+  `audio reference` supplies a voice for words you type. Type the line.
 - Beats can't be reordered after the fact; remove and re-add to change the
   sequence.
 

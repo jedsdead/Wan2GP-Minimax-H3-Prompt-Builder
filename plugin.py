@@ -316,7 +316,22 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     label="What the video contributes",
                     placeholder="handheld camera movement and cutting rhythm",
                 )
-                video_retention = locked_dd(VISUAL_RETENTION, "Retention")
+                video_retention = locked_dd(VISUAL_RETENTION,
+                                            "Retention (picture)")
+
+                gr.Markdown(
+                    "If the video's **audio** is being reused or referenced, "
+                    "set it below - audio uses a different marker set from "
+                    "picture, and gets its own <Audio N> label. Tick the "
+                    "matching task type (audio reuse, or audio reference)."
+                )
+                with gr.Row():
+                    video_audio = locked_dd(AUDIO_RETENTION,
+                                            "Retention (audio)")
+                    video_audio_desc = gr.Textbox(
+                        label="What the audio contributes",
+                        placeholder="the original spoken dialogue",
+                    )
 
             # ---- cast ------------------------------------------------------
             with gr.Accordion("Cast", open=False):
@@ -370,8 +385,29 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 )
 
             # ---- reference subjects ---------------------------------------
+            with gr.Accordion("Reference task", open=False,
+                               visible=False) as ref_task_section:
+                gr.Markdown(
+                    "Required for every reference prompt, including ones with "
+                    "no subjects. The task type tells the model what kind of "
+                    "job this is, and the summary says what the finished video "
+                    "shows."
+                )
+                task_types = gr.CheckboxGroup(
+                    TASK_TYPES, label="Task type - combined with + in summary",
+                )
+                summary_text = gr.Textbox(
+                    label="Summary",
+                    lines=2,
+                    placeholder="The man in <Video 1> is replaced by a young woman performing the same actions.",
+                )
+
             with gr.Accordion("Reference subjects", open=False, visible=False) as ref_section:
                 gr.Markdown(
+                    "Optional - only needed when something comes from a "
+                    "reference asset. Generating a character from description "
+                    "alone needs no entry here; describe them in the shot "
+                    "anchor instead.\n\n"
                     "One image can supply several subjects, and one subject "
                     "can draw on several images. An image used only to define "
                     "a subject needs no entry of its own.\n\n"
@@ -431,14 +467,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     inputs=[subject_count], outputs=_sub_out,
                 )
 
-                task_types = gr.CheckboxGroup(
-                    TASK_TYPES, label="Task type - combined with + in summary",
-                )
-                summary_text = gr.Textbox(
-                    label="Summary (draft it yourself, or edit after inserting)",
-                    lines=2,
-                    placeholder="A fishmonger works the counter while a schoolboy stops to ask about the fish.",
-                )
+
 
             # ---- shots -----------------------------------------------------
             with gr.Accordion("Shots", open=True):
@@ -583,7 +612,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         flat = [mode, duration, style, location, lighting, atmosphere,
                 camera_type,
-                video_role, video_desc, video_retention, speaker_count]
+                video_role, video_desc, video_retention,
+                video_audio, video_audio_desc, speaker_count]
         for s in speakers:
             flat += [s["name"], s["onscreen"], s["age"], s["gender"],
                      s["pitch"], s["timbre"], s["rate"], s["accent"]]
@@ -617,7 +647,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         mode.change(
             fn=self._apply_mode,
             inputs=[mode],
-            outputs=[ref_section, video_section, shot_hint],
+            outputs=[ref_task_section, ref_section, video_section, shot_hint],
         )
 
         self._wire_model_visibility(root, model_warning)
@@ -652,8 +682,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             hint = ""
 
         return (
-            gr.update(visible=is_ref),
-            gr.update(visible=is_ref or is_fl),
+            gr.update(visible=is_ref),          # reference task
+            gr.update(visible=is_ref),          # reference subjects
+            gr.update(visible=is_ref or is_fl), # source video
             gr.update(value=hint),
         )
 
@@ -896,7 +927,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         lead = f"{who} ({speaker})" if who else f"({speaker})"
         lead = lead[0].upper() + lead[1:]
         if action:
-            lead += f" {action}"
+            # Lowercase the first letter: it continues the sentence after the
+            # speaker's name and ID, rather than starting a new one.
+            lead += " " + action[0].lower() + action[1:]
 
         if speech:
             sentence = f"{lead}: <d>[{lang}] {speech}</d>"
@@ -976,6 +1009,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         video_role = cls._s(take())
         video_desc = cls._s(take())
         video_retention = cls._s(take())
+        video_audio = cls._s(take())
+        video_audio_desc = cls._s(take())
 
         speaker_count = int(cls._s(take()) or 0)
         speakers = []
@@ -1072,7 +1107,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         counters = {k: 0 for k in ASSET_KINDS}
         defs, retention = [], []
 
+        skipped = 0
         for s in active:
+            # An entry with no description and no source defines nothing.
+            # Emitting it produces "<Subject 1>." and a retention marker for
+            # content the model was never shown.
+            if not cls._s(s["desc"]) and not cls._s(s["source"]):
+                skipped += 1
+                continue
             kind = cls._s(s["kind"]) or "Subject"
             counters[kind] = counters.get(kind, 0) + 1
             label = f"<{kind} {counters[kind]}>"
@@ -1103,12 +1145,25 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 entry += f" - {note}"
             retention.append(entry.rstrip(".") + ".")
 
+        video_label = ""
         if video_role != "none" and video_desc:
             counters["Video"] += 1
-            vlabel = f"<Video {counters['Video']}>"
-            defs.append(f"{vlabel} provides {video_desc}.")
+            video_label = f"<Video {counters['Video']}>"
+            defs.append(f"{video_label} provides {video_desc}.")
             retention.append(
-                f"{vlabel}: {video_retention or 'weak_reference'} - {video_desc}."
+                f"{video_label}: {video_retention or 'weak_reference'} - {video_desc}."
+            )
+
+        # Audio from the source video gets its own <Audio N> label and uses
+        # the audio marker set, which differs from the picture one.
+        if video_audio or video_audio_desc:
+            counters["Audio"] += 1
+            alabel = f"<Audio {counters['Audio']}>"
+            what = video_audio_desc or "the original audio"
+            source = f" from {video_label}" if video_label else ""
+            defs.append(f"{alabel} is {what}{source}.")
+            retention.append(
+                f"{alabel}: {video_audio or 'reference'} - {what}."
             )
 
         prefix = cls._s(task_types)
@@ -1129,14 +1184,31 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         ]
         # Single newlines only - a blank line would make WanGP treat what
         # follows as a separate generation.
-        return (cls._no_blank_lines("\n".join(sections)),
-                "Reference prompt written - check the summary reads naturally.")
+        warnings = []
+        if not prefix:
+            warnings.append("no **task type** ticked - the model is not told "
+                            "what kind of job this is")
+        if not summary_text:
+            warnings.append("**summary** is empty")
+        if skipped:
+            warnings.append(f"{skipped} reference entr"
+                            f"{'y was' if skipped == 1 else 'ies were'} "
+                            "skipped for having no description or source")
+        if not any(cls._s(s["anchor"]) for s in shots):
+            warnings.append("no **anchor** on any shot - nothing describes "
+                            "what is in frame")
+
+        status = ("Reference prompt written - check the summary reads naturally."
+                  if not warnings
+                  else "Written, but: " + "; ".join(warnings) + ".")
+        return cls._no_blank_lines("\n".join(sections)), status
 
     @staticmethod
     def _clear():
         # mode, duration, style, location, lighting, atmosphere,
-        # camera_type, video_role, video_desc, video_retention
-        out = [MODES[0], 8.0, "", "", "", "", "", "none", "", ""]
+        # camera_type, video_role, video_desc, video_retention,
+        # video_audio, video_audio_desc
+        out = [MODES[0], 8.0, "", "", "", "", "", "none", "", "", "", ""]
         out.append(0)                                 # speaker_count
         for _ in range(MAX_SPEAKERS):
             # name, presence, age, gender, pitch, timbre, rate, accent.

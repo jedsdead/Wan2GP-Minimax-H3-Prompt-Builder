@@ -154,6 +154,11 @@ Task type and summary. Needed for **every** reference prompt, including ones
 with no subjects — which is why they sit in their own section rather than inside
 the subjects one.
 
+The summary is yours to write. **Draft summary from fields** composes a first
+pass from what you've entered, which you can then edit — it's a starting point,
+not a finished sentence. Note that the `[task type]` prefix is added when the
+prompt is built, so it won't appear in the box itself.
+
 ### Reference subjects (Ref2VA)
 
 Optional. Only needed when something comes from a reference asset — generating a

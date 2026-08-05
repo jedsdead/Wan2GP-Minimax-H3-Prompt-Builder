@@ -398,9 +398,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 )
                 summary_text = gr.Textbox(
                     label="Summary",
-                    lines=2,
+                    lines=3,
                     placeholder="The man in <Video 1> is replaced by a young woman performing the same actions.",
                 )
+                with gr.Row():
+                    draft_summary_btn = gr.Button("Draft summary from fields",
+                                                  size="sm")
+                summary_status = gr.Markdown("")
 
             with gr.Accordion("Reference subjects", open=False, visible=False) as ref_section:
                 gr.Markdown(
@@ -634,6 +638,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         insert_btn.click(fn=self._build, inputs=flat,
                          outputs=[self.prompt, status])
+
+        draft_summary_btn.click(
+            fn=self._draft_summary, inputs=flat,
+            outputs=[summary_text, summary_status],
+        )
         all_groups = (
             [s["group"] for s in speakers]
             + [s["group"] for s in subjects]
@@ -989,7 +998,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
     # -- top level ---------------------------------------------------------
 
     @classmethod
-    def _build(cls, *values):
+    def _unpack(cls, values):
+        """
+        Walk the flat input list into a dict. Shared by _build and
+        _draft_summary so the two can never drift out of step.
+        """
         vals = list(values)
         i = 0
 
@@ -1055,6 +1068,108 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music_presets = cls._s(take())
         music = cls._s(take())
         music_none = take()
+
+        return dict(
+            mode=mode, duration=duration, style=style, location=location,
+            lighting=lighting, atmosphere=atmosphere, camera_type=camera_type,
+            video_role=video_role, video_desc=video_desc,
+            video_retention=video_retention, video_audio=video_audio,
+            video_audio_desc=video_audio_desc,
+            speaker_count=speaker_count, speakers=speakers,
+            subject_count=subject_count, subjects=subjects,
+            task_types=task_types, summary_text=summary_text,
+            shot_count=shot_count, shots=shots,
+            soundscape_presets=soundscape_presets, soundscape=soundscape,
+            music_presets=music_presets, music=music, music_none=music_none,
+        )
+
+    @classmethod
+    def _draft_summary(cls, *values):
+        """
+        Compose a first-pass summary from what has been entered, for the user
+        to edit. Deliberately not run at build time: the summary should read
+        as a short human overview, and a generated one usually needs a pass.
+        """
+        d = cls._unpack(values)
+
+        prefix = cls._s(d["task_types"])
+        prefix = " + ".join(p.strip() for p in prefix.split(",") if p.strip())
+
+        shots = d["shots"][:max(1, d["shot_count"])]
+        subjects = d["subjects"][:d["subject_count"]]
+
+        named = []
+        counters = {k: 0 for k in ASSET_KINDS}
+        for s in subjects:
+            if not cls._s(s["desc"]) and not cls._s(s["source"]):
+                continue
+            kind = cls._s(s["kind"]) or "Subject"
+            counters[kind] += 1
+            desc = cls._s(s["desc"])
+            named.append(f"<{kind} {counters[kind]}>"
+                         + (f", {desc}," if desc else ""))
+
+        sentences = []
+
+        opening = cls._s(shots[0]["anchor"]) if shots else ""
+        if opening:
+            sentences.append("The target video shows "
+                             + opening[0].lower() + opening[1:] + ".")
+
+        lines = []
+        for shot in shots:
+            for beat in shot["beats"]:
+                if cls._s(beat["speech"]):
+                    lines.append(cls._s(beat["speaker"]) or "someone")
+        if lines:
+            who = "one speaker" if len(set(lines)) == 1 else f"{len(set(lines))} speakers"
+            sentences.append(f"There is dialogue from {who}.")
+
+        if len(shots) > 1:
+            sentences.append(f"It runs to {len(shots)} shots.")
+
+        if named:
+            sentences.append("It uses " + ", ".join(named).rstrip(",") + ".")
+
+        role = cls._s(d["video_role"])
+        if role not in ("", "none"):
+            vdesc = cls._s(d["video_desc"])
+            phrasing = {
+                "continue from it": "The source video is continued",
+                "edit it": "The source video is edited",
+                "reference its camera and cutting only":
+                    "The source video guides camera movement and cutting",
+            }.get(role, f"The source video is used to {role}")
+            sentences.append(phrasing
+                             + (f", providing {vdesc}" if vdesc else "") + ".")
+
+        if not sentences:
+            return "", ("Nothing to summarise yet - add a shot anchor, a "
+                        "reference entry, or a source video first.")
+
+        draft = " ".join(sentences)
+        note = ("Draft written - edit it so it reads as your own overview."
+                if prefix else
+                "Draft written, but no **task type** is ticked, so the summary "
+                "will have no prefix.")
+        return draft, note
+
+    @classmethod
+    def _build(cls, *values):
+        d = cls._unpack(values)
+        mode = d["mode"]; duration = d["duration"]; style = d["style"]
+        location = d["location"]; lighting = d["lighting"]
+        atmosphere = d["atmosphere"]; camera_type = d["camera_type"]
+        video_role = d["video_role"]; video_desc = d["video_desc"]
+        video_retention = d["video_retention"]; video_audio = d["video_audio"]
+        video_audio_desc = d["video_audio_desc"]
+        speaker_count = d["speaker_count"]; speakers = d["speakers"]
+        subject_count = d["subject_count"]; subjects = d["subjects"]
+        task_types = d["task_types"]; summary_text = d["summary_text"]
+        shot_count = d["shot_count"]; shots = d["shots"]
+        soundscape_presets = d["soundscape_presets"]; soundscape = d["soundscape"]
+        music_presets = d["music_presets"]; music = d["music"]
+        music_none = d["music_none"]
 
         is_ref = mode.startswith("Ref2VA")
         shots = shots[:max(1, shot_count)]

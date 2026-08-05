@@ -149,6 +149,12 @@ as a person — the label covers any reusable visible content. An image used onl
 to define a subject needs no entry of its own; cite it in the subject's source
 field instead.
 
+If a subject speaks, set **Speaks as** to the matching cast member. Subject
+numbers and speaker numbers are independent sequences — a location listed as
+Subject 2 doesn't make the second cast member S2 — so the link is explicit
+rather than positional. Linked subjects are written as `<Subject 3> (S1)` in the
+definitions, and the ID is deliberately kept out of `retention_analysis`.
+
 Retention markers are fixed values: `fully_preserved`, `partially_preserved`,
 `attribute_transfer`, `weak_reference` for visuals, and `fully_copy`,
 `partially_copy`, `reference`, `weak_reference` for audio.
@@ -203,4 +209,4 @@ adds components at load time — lower them if the panel feels slow to open.
 
 ## Licence
 
-Apache 2.0
+MIT

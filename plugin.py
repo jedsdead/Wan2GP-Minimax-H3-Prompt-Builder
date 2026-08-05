@@ -374,7 +374,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 gr.Markdown(
                     "One image can supply several subjects, and one subject "
                     "can draw on several images. An image used only to define "
-                    "a subject needs no entry of its own."
+                    "a subject needs no entry of its own.\n\n"
+                    "If a subject speaks, link it to a cast member with "
+                    "**Speaks as** - subject numbers and speaker numbers are "
+                    "independent, so a location listed as Subject 2 does not "
+                    "make the second cast member S2."
                 )
                 subject_count = gr.State(0)
                 for i in range(MAX_SUBJECTS):
@@ -386,7 +390,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 label="Source asset(s)",
                                 placeholder="Picture 1",
                             )
-                            r_speaks = gr.Checkbox(label="Speaks", value=False)
+                            r_speaks = gr.Dropdown(
+                                [""] + [f"S{n + 1}" for n in range(MAX_SPEAKERS)],
+                                label="Speaks as", value="",
+                                info="Link this subject to a cast member",
+                            )
                         r_desc = gr.Textbox(
                             label="What it is",
                             placeholder="the fishmonger, heavy apron, forearms wet to the elbow",
@@ -1071,7 +1079,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             src = cls._s(s["source"])
             desc = cls._s(s["desc"])
 
-            line = f"{label} is {desc}" if desc else f"{label}"
+            # A referenced subject that speaks carries both labels, e.g.
+            # "<Subject 3> (S1)". The speaker ID belongs in the definition
+            # and in the description, but never in retention_analysis.
+            speaker_id = cls._s(s["speaks"])
+            def_label = f"{label} ({speaker_id})" if speaker_id else label
+
+            line = f"{def_label} is {desc}" if desc else f"{def_label}"
             if src:
                 line += f", from {src}"
             defs.append(line.rstrip(".") + ".")
@@ -1130,7 +1144,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             out += ["", "on-screen", "", "", "", "", "", ""]
         out.append(0)                                 # subject_count
         for _ in range(MAX_SUBJECTS):
-            out += ["Subject", "", False, "", "fully_preserved", "", ""]
+            out += ["Subject", "", "", "", "fully_preserved", "", ""]
         out += [[], "", 1]                            # task_types, summary, shot_count
         for si in range(MAX_SHOTS):
             # cut, cutverb, framing, lens, motion, ampl, speed, anchor, beats

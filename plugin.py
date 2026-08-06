@@ -633,20 +633,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                     label="Spoken words (inside <d>) - leave blank for non-verbal",
                                 )
                                 with gr.Row():
-                                    if bi == 0:
-                                        # The first beat starts when the shot
-                                        # does, which the shot's own cut time
-                                        # already states.
-                                        b_at = gr.Number(value=None,
-                                                         visible=False)
-                                    else:
-                                        b_at = gr.Number(
-                                            label="At (seconds, optional)",
-                                            value=None, minimum=0, step=0.5,
-                                            info="Times an event inside the "
-                                                 "shot, e.g. a clash at "
-                                                 "00:04.000",
-                                        )
+                                    b_at = gr.Number(
+                                        label="At (seconds, optional)",
+                                        value=None, minimum=0, step=0.5,
+                                        info="When this beat happens. A shot "
+                                             "cutting at 4s can have its first "
+                                             "beat at 4.5s",
+                                    )
                                     b_carries = gr.Checkbox(
                                         label="Line carries across the next cut",
                                         value=False,

@@ -3,24 +3,31 @@ MiniMax H3 Prompt Builder - a WanGP plugin
 ------------------------------------------
 Builds MiniMax H3 prompts in the format described by MiniMax's own guides:
 
-  base modes (T2VA / I2VA / FL2VA / L2VA)
+  base modes
     https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md
-  full-reference mode (Ref2VA)
+  full reference
     https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md
 
-Base modes emit three named fields; reference mode emits six. The builder owns
-the mechanical parts - mode instruction lines, shot timestamps, speaker IDs,
-<d> wrapping, retention markers, task-type prefixes and N/A placeholders.
+There is one form rather than a set of modes. The output always uses the
+six-section reference shape, with N/A in any section that does not apply -
+a character is a subject whether or not a reference asset backs it.
 
-DRAFT STATUS (v0.1)
-  - Shots and beats use fixed slots revealed by count dropdowns, not the
-    drag-reorderable list from the design mockups. Gradio makes true dynamic
-    lists awkward; the show/hide pattern is the one already proven to work in
-    this plugin API.
-  - Mode is chosen manually. Auto-detection is attempted but cannot be relied
-    on - see _wire_model_visibility() for why.
-  - Prose templates are a first pass. Expect to tune the sentence shapes after
-    reading real output.
+Keyframe images are attached in the generator, not here, and the model
+associates them with the prompt positionally: a start image is described in
+Shot 1's anchor, an end image in the final beat of the last shot. So the
+builder has nothing to configure for them, only guidance about where each one
+belongs.
+
+The builder owns the mechanical parts: shot timestamps, intra-shot beat
+timing, speaker IDs written once then referenced, <d> wrapping, retention
+markers, task-type prefixes and N/A placeholders.
+
+KNOWN SHAPE
+  - Shots, beats and subjects use fixed slots revealed by add and
+    remove buttons rather than components created on demand. Gradio makes
+    true dynamic lists awkward inside an injected plugin layout.
+  - Prose templates are a first pass; read the output before committing to a
+    long generation.
 """
 
 import re
@@ -34,8 +41,8 @@ from shared.utils.plugins import WAN2GPPlugin
 # Limits
 # =============================================================================
 
-MAX_SPEAKERS = 6
-MAX_SUBJECTS = 8
+MAX_ENTRIES = 8      # cast and subjects are one list
+MAX_SPEAKERS = 6     # how many speaker slots the Speaker dropdown offers
 MAX_SHOTS = 6
 MAX_BEATS = 5
 
@@ -48,13 +55,16 @@ H3_MODEL_HINTS = ("minimax", "h3")
 # Vocabulary
 # =============================================================================
 
-MODES = [
-    "T2VA - text only",
-    "I2VA - start image",
-    "FL2VA - start and end image",
-    "L2VA - end image only",
-    "Ref2VA - full reference",
-]
+# Guidance only. Keyframe images are attached in the generator, and the model
+# associates them with the prompt positionally - so there is nothing for the
+# builder to configure, only somewhere to say where each one gets described.
+KEYFRAME_NOTE = (
+    "Keyframe images are attached in the generator, not here. If you are "
+    "starting from an image, describe it in **Shot 1's anchor**. If you have "
+    "an end image, describe it in the **final beat of the last shot**. "
+    "Reference labels like `<Picture 1>` resolve to the images loaded above, "
+    "in order."
+)
 
 STYLES = [
     "", "Live-action, cinematic", "Live-action, documentary",
@@ -264,7 +274,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         below: insert_after does parent.children.pop(-1) and assumes the
         constructor added exactly one top-level child.
         """
-        speakers, subjects, shots = [], [], []
+        entries, shots = [], []
 
         def dd(choices, label, **kw):
             return gr.Dropdown(choices, label=label, value="",
@@ -285,12 +295,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             model_warning = gr.Markdown(visible=False)
 
-            mode = gr.Radio(MODES, label="Mode", value=MODES[0])
-            gr.Markdown(
-                "Pick the mode that matches what you have attached in the "
-                "generator above. Reference mode emits six sections instead "
-                "of three."
-            )
+            gr.Markdown(KEYFRAME_NOTE)
 
             with gr.Row():
                 duration = gr.Number(label="Duration (seconds)", value=8.0,
@@ -306,7 +311,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 camera_type = dd(CAMERA_TYPES, "Camera / stock")
 
             # ---- source video (FL2VA continue / Ref2VA video reference) ----
-            with gr.Accordion("Source video", open=False, visible=False) as video_section:
+            with gr.Accordion("Source video", open=False) as video_section:
                 video_role = gr.Radio(
                     ["none", "continue from it", "edit it",
                      "reference its camera and cutting only"],
@@ -333,150 +338,122 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         placeholder="the original spoken dialogue",
                     )
 
-            # ---- cast ------------------------------------------------------
-            with gr.Accordion("Cast", open=False):
+            # ---- cast and subjects (one list) ------------------------------
+            with gr.Accordion("Cast & subjects", open=True):
                 gr.Markdown(
-                    "Add anyone you want to refer to by a stable ID. Their "
-                    "description is written once, at their first appearance, "
-                    "and they are referenced as (S1), (S2) after that. Select "
-                    "them on a beat to attribute an action or a line to them - "
-                    "dialogue is optional."
+                    "Everything that appears - people, animals, places, props. "
+                    "Each entry becomes a `<Subject N>` definition, and the "
+                    "shot text refers to the label rather than repeating the "
+                    "description.\n\n"
+                    "**Speaker** is assigned by you, not derived from position: "
+                    "if entry 2 is a car and entry 3 talks, entry 3 can be S2. "
+                    "**Source asset** is only for entries that come from a "
+                    "reference picture."
                 )
-                speaker_count = gr.State(0)
-                for i in range(MAX_SPEAKERS):
+
+                entry_count = gr.State(0)
+
+                for i in range(MAX_ENTRIES):
                     with gr.Group(visible=False) as grp:
-                        gr.Markdown(f"**(S{i + 1})**")
+                        gr.Markdown(f"**Subject {i + 1}**")
+                        e_desc = gr.Textbox(
+                            label="Description",
+                            placeholder="the fishmonger, heavy apron, forearms wet to the elbow",
+                        )
                         with gr.Row():
-                            s_name = gr.Textbox(label="Who they are",
-                                                placeholder="the fishmonger in the heavy apron")
-                            s_onscreen = gr.Dropdown(
-                                ["on-screen", "off-screen"], label="Presence",
-                                value="on-screen",
+                            e_kind = gr.Dropdown(ASSET_KINDS, label="Label",
+                                                 value="Subject")
+                            e_speaker = gr.Dropdown(
+                                [""] + [f"S{n + 1}" for n in range(MAX_SPEAKERS)],
+                                label="Speaker", value="",
+                                info="Leave blank if it never vocalises",
+                            )
+                            e_onscreen = gr.Dropdown(
+                                ["", "on-screen", "off-screen"],
+                                label="Presence", value="",
                             )
                         with gr.Row():
-                            s_age = dd(VOICE_AGES, "Age")
-                            s_gender = dd(VOICE_GENDERS, "Gender")
-                            s_pitch = dd(VOICE_PITCH, "Pitch")
+                            e_age = dd(VOICE_AGES, "Voice age")
+                            e_gender = dd(VOICE_GENDERS, "Voice gender")
+                            e_pitch = dd(VOICE_PITCH, "Pitch")
                         with gr.Row():
-                            s_timbre = dd(VOICE_TIMBRE, "Timbre")
-                            s_rate = dd(VOICE_RATE, "Rate")
-                            s_accent = gr.Textbox(label="Accent (optional)")
-                    speakers.append({
-                        "group": grp, "name": s_name, "onscreen": s_onscreen,
-                        "age": s_age, "gender": s_gender, "pitch": s_pitch,
-                        "timbre": s_timbre, "rate": s_rate, "accent": s_accent,
+                            e_timbre = dd(VOICE_TIMBRE, "Timbre")
+                            e_rate = dd(VOICE_RATE, "Rate")
+                            e_accent = gr.Textbox(label="Accent (optional)")
+                        with gr.Row():
+                            e_source = gr.Textbox(
+                                label="Source asset (optional)",
+                                placeholder="Picture 1",
+                            )
+                            e_retention = gr.Dropdown(
+                                [""] + ALL_RETENTION, label="Retention",
+                                value="",
+                            )
+                        with gr.Row():
+                            e_note = gr.Textbox(
+                                label="What is retained",
+                                placeholder="the apron and wet forearms are retained",
+                            )
+                            e_shots = gr.Textbox(label="Appears in shots",
+                                                 placeholder="1, 2")
+                    entries.append({
+                        "group": grp, "kind": e_kind, "desc": e_desc,
+                        "speaker": e_speaker, "onscreen": e_onscreen,
+                        "age": e_age, "gender": e_gender, "pitch": e_pitch,
+                        "timbre": e_timbre, "rate": e_rate, "accent": e_accent,
+                        "source": e_source, "retention": e_retention,
+                        "note": e_note, "shots": e_shots,
                     })
 
-                # Created after the slots so the buttons always render
-                # directly beneath the last visible speaker - hidden groups
-                # take no vertical space.
                 with gr.Row():
-                    add_speaker = gr.Button("Add speaker", size="sm")
-                    rm_speaker = gr.Button("Remove last speaker", size="sm")
+                    add_entry = gr.Button("Add subject", size="sm")
+                    rm_entry = gr.Button("Remove last subject", size="sm")
 
-                _spk_out = [speaker_count] + [s["group"] for s in speakers]
-                add_speaker.click(
-                    fn=lambda n: self._step_count(n, +1, MAX_SPEAKERS),
-                    inputs=[speaker_count], outputs=_spk_out,
+                _entry_out = [entry_count] + [e["group"] for e in entries]
+                add_entry.click(
+                    fn=lambda n: self._step_count(n, +1, MAX_ENTRIES),
+                    inputs=[entry_count], outputs=_entry_out,
                 )
-                rm_speaker.click(
-                    fn=lambda n: self._step_count(n, -1, MAX_SPEAKERS),
-                    inputs=[speaker_count], outputs=_spk_out,
+                rm_entry.click(
+                    fn=lambda n: self._step_count(n, -1, MAX_ENTRIES),
+                    inputs=[entry_count], outputs=_entry_out,
                 )
 
-            # ---- reference subjects ---------------------------------------
-            with gr.Accordion("Reference task", open=False,
-                               visible=False) as ref_task_section:
+            with gr.Accordion("Reference task", open=False) as ref_task_section:
                 gr.Markdown(
-                    "Required for every reference prompt, including ones with "
-                    "no subjects. The task type tells the model what kind of "
-                    "job this is, and the summary says what the finished video "
-                    "shows."
+                    "Only needed when reference assets are involved. The task "
+                    "type tells the model what kind of job this is, and is "
+                    "written as a prefix on the summary."
                 )
                 task_types = gr.CheckboxGroup(
                     TASK_TYPES, label="Task type - combined with + in summary",
                 )
-                summary_text = gr.Textbox(
-                    label="Summary",
-                    lines=3,
-                    placeholder="The man in <Video 1> is replaced by a young woman performing the same actions.",
-                )
-                with gr.Row():
-                    draft_summary_btn = gr.Button("Draft summary from fields",
-                                                  size="sm")
-                summary_status = gr.Markdown("")
 
-            with gr.Accordion("Reference subjects", open=False, visible=False) as ref_section:
-                gr.Markdown(
-                    "Optional - only needed when something comes from a "
-                    "reference asset. Generating a character from description "
-                    "alone needs no entry here; describe them in the shot "
-                    "anchor instead.\n\n"
-                    "One image can supply several subjects, and one subject "
-                    "can draw on several images. An image used only to define "
-                    "a subject needs no entry of its own.\n\n"
-                    "If a subject speaks, link it to a cast member with "
-                    "**Speaks as** - subject numbers and speaker numbers are "
-                    "independent, so a location listed as Subject 2 does not "
-                    "make the second cast member S2."
-                )
-                subject_count = gr.State(0)
-                for i in range(MAX_SUBJECTS):
-                    with gr.Group(visible=False) as grp:
-                        with gr.Row():
-                            r_kind = gr.Dropdown(ASSET_KINDS, label="Label",
-                                                 value="Subject")
-                            r_source = gr.Textbox(
-                                label="Source asset(s)",
-                                placeholder="Picture 1",
-                            )
-                            r_speaks = gr.Dropdown(
-                                [""] + [f"S{n + 1}" for n in range(MAX_SPEAKERS)],
-                                label="Speaks as", value="",
-                                info="Link this subject to a cast member",
-                            )
-                        r_desc = gr.Textbox(
-                            label="What it is",
-                            placeholder="the fishmonger, heavy apron, forearms wet to the elbow",
-                        )
-                        with gr.Row():
-                            r_retention = gr.Dropdown(
-                                ALL_RETENTION,
-                                label="Retention", value="fully_preserved",
-                            )
-                            r_retention_note = gr.Textbox(
-                                label="What is retained",
-                                placeholder="the heavy apron and wet forearms are retained",
-                            )
-                            r_shots = gr.Textbox(label="Appears in shots",
-                                                 placeholder="1, 2, 3")
-                    subjects.append({
-                        "group": grp, "kind": r_kind, "source": r_source,
-                        "speaks": r_speaks, "desc": r_desc,
-                        "retention": r_retention, "note": r_retention_note,
-                        "shots": r_shots,
-                    })
+            retention_na = gr.Checkbox(
+                label="No retention analysis (writes N/A)",
+                value=False,
+                info="Tick when nothing is being preserved from a reference "
+                     "asset - subjects invented from description alone",
+            )
 
-                with gr.Row():
-                    add_subject = gr.Button("Add reference entry", size="sm")
-                    rm_subject = gr.Button("Remove last entry", size="sm")
+            summary_text = gr.Textbox(
+                label="Summary",
+                lines=3,
+                placeholder="A fishmonger works the counter of a covered market hall as a schoolboy stops to ask about the fish.",
+            )
+            with gr.Row():
+                draft_summary_btn = gr.Button("Draft summary from fields",
+                                              size="sm")
+            summary_status = gr.Markdown("")
 
-                _sub_out = [subject_count] + [s["group"] for s in subjects]
-                add_subject.click(
-                    fn=lambda n: self._step_count(n, +1, MAX_SUBJECTS),
-                    inputs=[subject_count], outputs=_sub_out,
-                )
-                rm_subject.click(
-                    fn=lambda n: self._step_count(n, -1, MAX_SUBJECTS),
-                    inputs=[subject_count], outputs=_sub_out,
-                )
-
-
-
-            # ---- shots -----------------------------------------------------
             with gr.Accordion("Shots", open=True):
                 shot_count = gr.State(1)
-                shot_hint = gr.Markdown("")
+                gr.Markdown(
+                    "Shot 1 opens the clip and takes no cut time. If you are "
+                    "working from a start and an end image, a single shot "
+                    "usually works best so the model can interpolate between "
+                    "them."
+                )
 
                 for si in range(MAX_SHOTS):
                     with gr.Group(visible=(si == 0)) as sgrp:
@@ -518,9 +495,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                              "dialogue when it has spoken words",
                                     )
                                     b_speaker = gr.Dropdown(
-                                        [""] + [f"S{n + 1}" for n in range(MAX_SPEAKERS)]
-                                        + ["S1,S2", "S1,S2,S3"],
-                                        label="Speaker", value="",
+                                        [f"Subject {n + 1}" for n in range(MAX_ENTRIES)],
+                                        label="Who", value=[],
+                                        multiselect=True,
+                                        info="Speaker IDs are added "
+                                             "automatically where they apply",
                                     )
                                     b_lang = gr.Dropdown(LANGUAGES,
                                                          label="Language",
@@ -532,15 +511,30 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 b_speech = gr.Textbox(
                                     label="Spoken words (inside <d>) - leave blank for non-verbal",
                                 )
-                                b_carries = gr.Checkbox(
-                                    label="Line carries across the next cut",
-                                    value=False,
-                                )
+                                with gr.Row():
+                                    if bi == 0:
+                                        # The first beat starts when the shot
+                                        # does, which the shot's own cut time
+                                        # already states.
+                                        b_at = gr.Number(value=None,
+                                                         visible=False)
+                                    else:
+                                        b_at = gr.Number(
+                                            label="At (seconds, optional)",
+                                            value=None, minimum=0, step=0.5,
+                                            info="Times an event inside the "
+                                                 "shot, e.g. a clash at "
+                                                 "00:04.000",
+                                        )
+                                    b_carries = gr.Checkbox(
+                                        label="Line carries across the next cut",
+                                        value=False,
+                                    )
                             beats.append({
                                 "group": bgrp, "type": b_type,
                                 "speaker": b_speaker, "lang": b_lang,
                                 "action": b_action, "speech": b_speech,
-                                "carries": b_carries,
+                                "at": b_at, "carries": b_carries,
                             })
 
                         with gr.Row():
@@ -614,25 +608,23 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         # ---- wiring -------------------------------------------------------
 
-        flat = [mode, duration, style, location, lighting, atmosphere,
+        flat = [duration, style, location, lighting, atmosphere,
                 camera_type,
                 video_role, video_desc, video_retention,
-                video_audio, video_audio_desc, speaker_count]
-        for s in speakers:
-            flat += [s["name"], s["onscreen"], s["age"], s["gender"],
-                     s["pitch"], s["timbre"], s["rate"], s["accent"]]
-        flat += [subject_count]
-        for s in subjects:
-            flat += [s["kind"], s["source"], s["speaks"], s["desc"],
-                     s["retention"], s["note"], s["shots"]]
-        flat += [task_types, summary_text, shot_count]
+                video_audio, video_audio_desc, entry_count]
+        for e in entries:
+            flat += [e["kind"], e["desc"], e["speaker"], e["onscreen"],
+                     e["age"], e["gender"], e["pitch"], e["timbre"],
+                     e["rate"], e["accent"], e["source"], e["retention"],
+                     e["note"], e["shots"]]
+        flat += [task_types, retention_na, summary_text, shot_count]
         for s in shots:
             flat += [s["cut"], s["cutverb"], s["framing"], s["lens"],
                      s["motion"], s["ampl"], s["speed"], s["anchor"],
                      s["beat_count"]]
             for b in s["beats"]:
                 flat += [b["type"], b["speaker"], b["lang"], b["action"],
-                         b["speech"], b["carries"]]
+                         b["speech"], b["at"], b["carries"]]
         flat += [soundscape_presets, soundscape,
                  music_presets, music, music_none]
 
@@ -644,8 +636,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             outputs=[summary_text, summary_status],
         )
         all_groups = (
-            [s["group"] for s in speakers]
-            + [s["group"] for s in subjects]
+            [e["group"] for e in entries]
             + [s["group"] for s in shots]
         )
         for s in shots:
@@ -653,49 +644,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         clear_btn.click(fn=self._clear, inputs=[], outputs=flat + all_groups)
 
-        mode.change(
-            fn=self._apply_mode,
-            inputs=[mode],
-            outputs=[ref_task_section, ref_section, video_section, shot_hint],
-        )
-
         self._wire_model_visibility(root, model_warning)
-
-    @staticmethod
-    def _apply_mode(mode):
-        """
-        Show only the sections a mode can actually use.
-
-        Reference subjects are Ref2VA-only. A source video is meaningful for
-        FL2VA (continuing an existing clip) and for Ref2VA (where it becomes
-        a <Video N> reference), and meaningless for the other three modes.
-        """
-        mode = mode or ""
-        is_ref = mode.startswith("Ref2VA")
-        is_fl = mode.startswith("FL2VA")
-
-        if is_ref:
-            hint = ("Reference mode writes six sections. Subject labels are "
-                    "numbered in the order you list them.")
-        elif is_fl:
-            hint = ("With a start and an end image, a single shot usually "
-                    "works best so the model can interpolate between them. "
-                    "The end image is assumed to land at the full duration.")
-        elif mode.startswith("L2VA"):
-            hint = ("Describe a plausible earlier state that converges on the "
-                    "reference image by the end of the clip.")
-        elif mode.startswith("I2VA"):
-            hint = ("Shot 1 should restate what is already in the start image "
-                    "before describing what changes.")
-        else:
-            hint = ""
-
-        return (
-            gr.update(visible=is_ref),          # reference task
-            gr.update(visible=is_ref),          # reference subjects
-            gr.update(visible=is_ref or is_fl), # source video
-            gr.update(value=hint),
-        )
 
     def _wire_model_visibility(self, root, warning):
         """
@@ -765,7 +714,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return ""
 
     @classmethod
-    def _opening_clause(cls, style, location, lighting, atmosphere, camera_type):
+    def _opening_clause(cls, style, location, lighting, atmosphere,
+                        camera_type, duration=None):
         """
         One sentence establishing the whole clip, written before [Shot 1]:
         style, setting, light, air and camera body.
@@ -781,6 +731,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             parts.append(f"with {atmosphere}")
         if camera_type:
             parts.append(f"shot on {camera_type}")
+        if duration:
+            try:
+                secs = float(duration)
+                secs = int(secs) if float(secs).is_integer() else secs
+                article = "an" if str(secs)[0] in "8" else "a"
+                parts.append(f"across {article} {secs}-second duration")
+            except (TypeError, ValueError):
+                pass
 
         if len(parts) == 1:
             return "" if not style else head + "."
@@ -857,51 +815,30 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return f"{minutes:02d}:{rest:06.3f}"
 
     @classmethod
-    def _instruction(cls, mode, duration):
-        """The exact boilerplate each keyframe mode requires."""
-        secs = f"{float(duration):.2f}" if duration else "0.00"
-        if mode.startswith("I2VA"):
-            return ("For the target video, at 0.00 seconds into the target "
-                    "video, <Picture 1> (from [Shot 1]) is fully referenced.")
-        if mode.startswith("FL2VA"):
-            return ("How the reference pictures align with the target video - "
-                    "Picture 1 (from Shot 1) aligns with the 0.00-second mark "
-                    f"of the target video; Picture 2 (from Shot 1) aligns with "
-                    f"the {secs}-second mark of the target video.")
-        if mode.startswith("L2VA"):
-            return ("How the reference pictures align with the target video - "
-                    "<Picture 1> (from [Shot 1]) aligns with the "
-                    f"{secs}-second mark of the target video.")
-        return ""
-
-    @classmethod
-    def _speaker_intro(cls, sp):
+    def _voice_phrase(cls, e):
         """
-        Identity phrase emitted at a speaker's first appearance. Age and
-        gender describe the person; pitch, timbre and rate describe the
-        voice - stacking all five into one adjective list reads badly.
+        Voice description for an entry that speaks. Written into its subject
+        definition rather than inline in the shot text, so it appears once.
         """
-        name = cls._s(sp["name"])
-        person = " ".join(b for b in [cls._s(sp["age"]), cls._s(sp["gender"])] if b)
-        voice_bits = [cls._s(sp[k]) for k in ("pitch", "timbre", "rate")]
-        voice_bits = [b for b in voice_bits if b]
-        accent = cls._s(sp["accent"])
-
-        clause = ""
+        if not cls._s(e.get("speaker")):
+            return ""
+        person = " ".join(b for b in [cls._s(e.get("age")),
+                                      cls._s(e.get("gender"))] if b)
+        bits = [cls._s(e.get(k)) for k in ("pitch", "timbre", "rate")]
+        bits = [b for b in bits if b]
+        parts = []
         if person:
-            clause = f"a {person}" if not person[0].lower() in "aeiou" else f"an {person}"
-        if voice_bits:
-            voice = "with a " + ", ".join(voice_bits) + " voice"
-            clause = f"{clause} {voice}" if clause else voice
+            parts.append(f"a {person} voice" if not bits else f"a {person}")
+        if bits:
+            parts.append("with a " + ", ".join(bits) + " voice")
+        accent = cls._s(e.get("accent"))
         if accent:
-            clause = (f"{clause} and {accent} accent" if clause
-                      else f"with {accent} accent")
-
-        if cls._s(sp["onscreen"]) == "off-screen":
-            clause = (clause + ", off-screen") if clause else "off-screen"
-
-        parts = [p for p in [name, clause] if p]
-        return ", ".join(parts)
+            parts.append(f"with {accent} accent" if not bits
+                         else f"and {accent} accent")
+        presence = cls._s(e.get("onscreen"))
+        if presence == "off-screen":
+            parts.append("heard off-screen")
+        return " ".join(parts)
 
     @classmethod
     def _camera_clause(cls, motion, ampl, speed):
@@ -917,27 +854,41 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return clause + "."
 
     @classmethod
-    def _beat_text(cls, beat, intro_used, lang_default="English"):
-        btype = cls._s(beat["type"])
+    def _beat_text(cls, beat, label_for, lang_default="English"):
+        """
+        A beat refers to subjects by label. Descriptions live in
+        subject_definitions, so the shot text stays short and the same
+        subject reads identically in every shot.
+        """
         action = cls._s(beat["action"])
         speech = cls._s(beat["speech"])
-        speaker = cls._s(beat["speaker"])
         lang = cls._s(beat["lang"]) or lang_default
 
-        # A speaker is emitted whenever one is selected, whether or not the
-        # beat has dialogue: "(S1) turns and looks" is a valid action beat
-        # attributed to a known character.
-        if not speaker:
+        who = beat["speaker"]
+        picked = who if isinstance(who, (list, tuple)) else ([who] if who else [])
+        labels = [label_for.get(cls._s(p), "") for p in picked]
+        labels = [l for l in labels if l]
+
+        at = cls._timecode(beat.get("at")) if beat.get("at") not in (None, "") else None
+        stamp = f"At {at}, " if at else ""
+
+        if not labels:
             if not action:
                 return ""
-            return action[0].upper() + action[1:] + ("" if action.endswith(".") else ".")
+            text = action[0].upper() + action[1:] if not stamp else action[0].lower() + action[1:]
+            return stamp + text + ("" if text.endswith(".") else ".")
 
-        who = intro_used.get(speaker, "")
-        lead = f"{who} ({speaker})" if who else f"({speaker})"
-        lead = lead[0].upper() + lead[1:]
+        # Several subjects vocalising together share one compound ID.
+        ids = re.findall(r"\((S\d+)\)", " ".join(labels))
+        if len(labels) > 1:
+            bare = [re.sub(r"\s*\(S\d+\)", "", l) for l in labels]
+            joined = ", ".join(bare[:-1]) + f" and {bare[-1]}"
+            subject_text = joined + (f" ({','.join(ids)})" if ids else "")
+        else:
+            subject_text = labels[0]
+
+        lead = stamp + subject_text if stamp else subject_text
         if action:
-            # Lowercase the first letter: it continues the sentence after the
-            # speaker's name and ID, rather than starting a new one.
             lead += " " + action[0].lower() + action[1:]
 
         if speech:
@@ -949,7 +900,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return lead + ("" if lead.endswith(".") else ".")
 
     @classmethod
-    def _shot_text(cls, idx, shot, speakers_map, intro_used):
+    def _shot_text(cls, idx, shot, label_for):
         anchor = cls._s(shot["anchor"])
         framing = cls._s(shot["framing"])
         head = f"[Shot {idx + 1}]"
@@ -985,13 +936,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             body.append(cam)
 
         for beat in shot["beats"]:
-            text = cls._beat_text(beat, intro_used)
-            if not text:
-                continue
-            body.append(text)
-            sp = cls._s(beat["speaker"])
-            if sp and sp in intro_used:
-                intro_used[sp] = ""  # identity written once
+            text = cls._beat_text(beat, label_for)
+            if text:
+                body.append(text)
 
         return head + " " + " ".join(b for b in body if b)
 
@@ -1012,7 +959,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             i += n
             return out[0] if n == 1 else out
 
-        mode = cls._s(take())
         duration = take()
         style = cls._s(take())
         location = cls._s(take())
@@ -1025,25 +971,19 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         video_audio = cls._s(take())
         video_audio_desc = cls._s(take())
 
-        speaker_count = int(cls._s(take()) or 0)
-        speakers = []
-        for _ in range(MAX_SPEAKERS):
-            speakers.append({
-                "name": take(), "onscreen": take(), "age": take(),
-                "gender": take(), "pitch": take(), "timbre": take(),
-                "rate": take(), "accent": take(),
-            })
-
-        subject_count = int(cls._s(take()) or 0)
-        subjects = []
-        for _ in range(MAX_SUBJECTS):
-            subjects.append({
-                "kind": take(), "source": take(), "speaks": take(),
-                "desc": take(), "retention": take(), "note": take(),
-                "shots": take(),
+        entry_count = int(cls._s(take()) or 0)
+        entries = []
+        for _ in range(MAX_ENTRIES):
+            entries.append({
+                "kind": take(), "desc": take(), "speaker": take(),
+                "onscreen": take(), "age": take(), "gender": take(),
+                "pitch": take(), "timbre": take(), "rate": take(),
+                "accent": take(), "source": take(), "retention": take(),
+                "note": take(), "shots": take(),
             })
 
         task_types = take()
+        retention_na = take()
         summary_text = cls._s(take())
         shot_count = int(cls._s(take()) or 1)
 
@@ -1058,7 +998,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             for _ in range(MAX_BEATS):
                 shot["beats"].append({
                     "type": take(), "speaker": take(), "lang": take(),
-                    "action": take(), "speech": take(), "carries": take(),
+                    "action": take(), "speech": take(), "at": take(),
+                    "carries": take(),
                 })
             shot["beats"] = shot["beats"][:int(cls._s(shot["beat_count"]) or 0)]
             shots.append(shot)
@@ -1070,14 +1011,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music_none = take()
 
         return dict(
-            mode=mode, duration=duration, style=style, location=location,
+            duration=duration, style=style, location=location,
             lighting=lighting, atmosphere=atmosphere, camera_type=camera_type,
             video_role=video_role, video_desc=video_desc,
             video_retention=video_retention, video_audio=video_audio,
             video_audio_desc=video_audio_desc,
-            speaker_count=speaker_count, speakers=speakers,
-            subject_count=subject_count, subjects=subjects,
-            task_types=task_types, summary_text=summary_text,
+            entry_count=entry_count, entries=entries,
+            task_types=task_types, retention_na=retention_na,
+            summary_text=summary_text,
             shot_count=shot_count, shots=shots,
             soundscape_presets=soundscape_presets, soundscape=soundscape,
             music_presets=music_presets, music=music, music_none=music_none,
@@ -1096,40 +1037,70 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         prefix = " + ".join(p.strip() for p in prefix.split(",") if p.strip())
 
         shots = d["shots"][:max(1, d["shot_count"])]
-        subjects = d["subjects"][:d["subject_count"]]
+        entries = d["entries"][:d["entry_count"]]
 
         named = []
         counters = {k: 0 for k in ASSET_KINDS}
-        for s in subjects:
-            if not cls._s(s["desc"]) and not cls._s(s["source"]):
+        for e in entries:
+            if not cls._s(e["desc"]) and not cls._s(e["source"]):
                 continue
-            kind = cls._s(s["kind"]) or "Subject"
+            kind = cls._s(e["kind"]) or "Subject"
             counters[kind] += 1
-            desc = cls._s(s["desc"])
+            desc = cls._s(e["desc"])
             named.append(f"<{kind} {counters[kind]}>"
                          + (f", {desc}," if desc else ""))
 
-        sentences = []
-
+        # Shaped to read like MiniMax's own examples: one lead sentence
+        # naming what the video is, then the assets it draws on.
+        style = cls._s(d["style"])
+        duration = d["duration"]
         opening = cls._s(shots[0]["anchor"]) if shots else ""
-        if opening:
-            sentences.append("The target video shows "
-                             + opening[0].lower() + opening[1:] + ".")
 
-        lines = []
+        # "shows" reads better than "is" here, but a duration and style
+        # don't fit inside it, so they get their own short sentence after.
+        lead_bits = []
+        if opening:
+            lead_bits.append("The target video shows "
+                             + opening[0].lower() + opening[1:])
+        if named:
+            bare = [n.split(",")[0] for n in named]
+            joined = (", ".join(bare[:-1]) + f" and {bare[-1]}"
+                      if len(bare) > 1 else bare[0])
+            if lead_bits:
+                lead_bits.append(f", featuring {joined}")
+            else:
+                lead_bits.append(f"The target video features {joined}")
+
+        sentences = []
+        if lead_bits:
+            lead = "".join(lead_bits).replace(" ,", ",")
+            sentences.append(lead.rstrip(".") + ".")
+
+        descriptor = []
+        try:
+            secs = float(duration)
+            secs = int(secs) if float(secs).is_integer() else secs
+            descriptor.append(f"{secs} seconds")
+        except (TypeError, ValueError):
+            pass
+        if style:
+            descriptor.append(f"in a {style[0].lower() + style[1:]} style")
+        if descriptor and sentences:
+            sentences.append("It runs " + " ".join(descriptor) + ".")
+
+        voices = set()
         for shot in shots:
             for beat in shot["beats"]:
                 if cls._s(beat["speech"]):
-                    lines.append(cls._s(beat["speaker"]) or "someone")
-        if lines:
-            who = "one speaker" if len(set(lines)) == 1 else f"{len(set(lines))} speakers"
-            sentences.append(f"There is dialogue from {who}.")
+                    who = beat["speaker"]
+                    picked = who if isinstance(who, (list, tuple)) else [who]
+                    voices.update(cls._s(p) for p in picked if cls._s(p))
+        if voices:
+            label = "one speaker" if len(voices) == 1 else f"{len(voices)} speakers"
+            sentences.append(f"There is dialogue from {label}.")
 
         if len(shots) > 1:
             sentences.append(f"It runs to {len(shots)} shots.")
-
-        if named:
-            sentences.append("It uses " + ", ".join(named).rstrip(",") + ".")
 
         role = cls._s(d["video_role"])
         if role not in ("", "none"):
@@ -1142,6 +1113,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             }.get(role, f"The source video is used to {role}")
             sentences.append(phrasing
                              + (f", providing {vdesc}" if vdesc else "") + ".")
+
+        if not opening and not named and role in ("", "none"):
+            sentences = []
 
         if not sentences:
             return "", ("Nothing to summarise yet - add a shot anchor, a "
@@ -1157,37 +1131,85 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
     @classmethod
     def _build(cls, *values):
         d = cls._unpack(values)
-        mode = d["mode"]; duration = d["duration"]; style = d["style"]
+        duration = d["duration"]; style = d["style"]
         location = d["location"]; lighting = d["lighting"]
         atmosphere = d["atmosphere"]; camera_type = d["camera_type"]
         video_role = d["video_role"]; video_desc = d["video_desc"]
         video_retention = d["video_retention"]; video_audio = d["video_audio"]
         video_audio_desc = d["video_audio_desc"]
-        speaker_count = d["speaker_count"]; speakers = d["speakers"]
-        subject_count = d["subject_count"]; subjects = d["subjects"]
-        task_types = d["task_types"]; summary_text = d["summary_text"]
+        entry_count = d["entry_count"]; entries = d["entries"]
+        task_types = d["task_types"]; retention_na = d["retention_na"]
+        summary_text = d["summary_text"]
         shot_count = d["shot_count"]; shots = d["shots"]
         soundscape_presets = d["soundscape_presets"]; soundscape = d["soundscape"]
         music_presets = d["music_presets"]; music = d["music"]
         music_none = d["music_none"]
 
-        is_ref = mode.startswith("Ref2VA")
         shots = shots[:max(1, shot_count)]
 
-        # speaker identity phrases, consumed on first use
-        intro_used = {}
-        for n in range(min(speaker_count, MAX_SPEAKERS)):
-            intro = cls._speaker_intro(speakers[n])
-            if intro:
-                intro_used[f"S{n + 1}"] = intro
+        # One output shape for every case. Characters are subjects whether or
+        # not they come from a reference asset, so subject_definitions is
+        # always written and unused sections say N/A.
+        #
+        # Note this is the reference schema. The base guide specifies three
+        # fields for text and keyframe prompts; if plain text-to-video results
+        # get worse, this is the first thing to test.
+        active = entries[:entry_count]
+        counters = {k: 0 for k in ASSET_KINDS}
+        defs, retention = [], []
+        label_for = {}          # "Subject 3" -> "<Subject 3> (S1)"
+        skipped = 0
+        uses_reference_assets = False
+
+        for idx, e in enumerate(active):
+            desc = cls._s(e["desc"])
+            source = cls._s(e["source"])
+            if not desc and not source:
+                skipped += 1
+                continue
+
+            kind = cls._s(e["kind"]) or "Subject"
+            counters[kind] = counters.get(kind, 0) + 1
+            label = f"<{kind} {counters[kind]}>"
+
+            speaker = cls._s(e["speaker"])
+            def_label = f"{label} ({speaker})" if speaker else label
+            label_for[f"Subject {idx + 1}"] = def_label
+
+            # The description lives here, so the shot text can just use the
+            # label - which is what keeps a subject consistent across shots.
+            line = f"{def_label} is {desc}" if desc else def_label
+            voice = cls._voice_phrase(e)
+            if voice:
+                line += f", {voice}"
+            if source:
+                line += f", from {source}"
+            defs.append(line.rstrip(".") + ".")
+
+            # Only reference-backed entries have anything to retain.
+            if source:
+                uses_reference_assets = True
+            marker = cls._s(e["retention"])
+            if source and marker:
+                note = cls._s(e["note"])
+                where = cls._s(e["shots"])
+                scope = ""
+                if where:
+                    shot_list = ", ".join(f"[Shot {p.strip()}]"
+                                          for p in where.split(",") if p.strip())
+                    scope = f" (appears in {shot_list})"
+                entry = f"{label}{scope}: {marker}"
+                if note:
+                    entry += f" - {note}"
+                retention.append(entry.rstrip(".") + ".")
 
         # Global scene block, written once before [Shot 1]. Style, location,
         # lighting, atmosphere and camera body hold for the whole clip, so
         # they belong here rather than inside the opening shot.
         opening = cls._opening_clause(style, location, lighting,
-                                      atmosphere, camera_type)
+                                      atmosphere, camera_type, duration)
 
-        shot_lines = [cls._shot_text(n, s, speakers, intro_used)
+        shot_lines = [cls._shot_text(n, s, label_for)
                       for n, s in enumerate(shots)]
         body = "\n".join(l for l in ([opening] + shot_lines) if l.strip())
 
@@ -1202,63 +1224,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             music_field = cls._merge_audio(
                 music_presets, music, lead="{}.",
             ) or "N/A"
-
-        if not is_ref:
-            # No blank lines anywhere: WanGP splits a prompt into separate
-            # generations at an empty line. The guide asks for a blank line
-            # after the instruction line, but that would break the prompt
-            # into two jobs, so sections are packed onto consecutive lines.
-            lines = []
-            instruction = cls._instruction(mode, duration)
-            if instruction:
-                lines.append(instruction)
-            lines.append(f"integrated_multimodal_description: {body}")
-            lines.append(f"overall_soundscape: {sound_field}")
-            lines.append(f"non_diegetic_music: {music_field}")
-            return cls._no_blank_lines("\n".join(lines)), "Prompt written."
-
-        # ---- reference mode: six sections ----
-        active = subjects[:subject_count]
-        counters = {k: 0 for k in ASSET_KINDS}
-        defs, retention = [], []
-
-        skipped = 0
-        for s in active:
-            # An entry with no description and no source defines nothing.
-            # Emitting it produces "<Subject 1>." and a retention marker for
-            # content the model was never shown.
-            if not cls._s(s["desc"]) and not cls._s(s["source"]):
-                skipped += 1
-                continue
-            kind = cls._s(s["kind"]) or "Subject"
-            counters[kind] = counters.get(kind, 0) + 1
-            label = f"<{kind} {counters[kind]}>"
-            src = cls._s(s["source"])
-            desc = cls._s(s["desc"])
-
-            # A referenced subject that speaks carries both labels, e.g.
-            # "<Subject 3> (S1)". The speaker ID belongs in the definition
-            # and in the description, but never in retention_analysis.
-            speaker_id = cls._s(s["speaks"])
-            def_label = f"{label} ({speaker_id})" if speaker_id else label
-
-            line = f"{def_label} is {desc}" if desc else f"{def_label}"
-            if src:
-                line += f", from {src}"
-            defs.append(line.rstrip(".") + ".")
-
-            marker = cls._s(s["retention"])
-            note = cls._s(s["note"])
-            where = cls._s(s["shots"])
-            scope = ""
-            if where and kind in ("Subject", "Picture"):
-                shot_list = ", ".join(f"[Shot {p.strip()}]"
-                                      for p in where.split(",") if p.strip())
-                scope = f" (appears in {shot_list})"
-            entry = f"{label}{scope}: {marker}"
-            if note:
-                entry += f" - {note}"
-            retention.append(entry.rstrip(".") + ".")
 
         video_label = ""
         if video_role != "none" and video_desc:
@@ -1290,19 +1255,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         detailed = body
 
         sections = [
-            "subject_definitions:\n" + "\n".join(defs) if defs else "subject_definitions:",
-            "summary:\n" + summary if summary else "summary:",
-            "retention_analysis:\n" + "\n".join(retention) if retention else "retention_analysis:",
+            "subject_definitions:\n" + "\n".join(defs) if defs
+            else "subject_definitions:\nN/A",
+            "summary:\n" + summary if summary else "summary:\nN/A",
+            "retention_analysis:\nN/A" if retention_na
+            else ("retention_analysis:\n" + "\n".join(retention) if retention
+                  else "retention_analysis:\nN/A"),
             "detailed_description:\n" + detailed,
             "overall_soundscape:\n" + sound_field,
             "non_diegetic_music:\n" + music_field,
         ]
         # Single newlines only - a blank line would make WanGP treat what
         # follows as a separate generation.
+        # Only nag about a task type when something is actually referenced.
+        # Subjects invented from description are not reference assets, and
+        # most prompts have no task type at all.
+        uses_refs = uses_reference_assets or cls._s(video_role) not in ("", "none")
+
         warnings = []
-        if not prefix:
-            warnings.append("no **task type** ticked - the model is not told "
-                            "what kind of job this is")
+        if uses_refs and not prefix:
+            warnings.append("reference assets are in use but no **task type** "
+                            "is ticked")
         if not summary_text:
             warnings.append("**summary** is empty")
         if skipped:
@@ -1313,7 +1286,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             warnings.append("no **anchor** on any shot - nothing describes "
                             "what is in frame")
 
-        status = ("Reference prompt written - check the summary reads naturally."
+        status = ("Prompt written."
                   if not warnings
                   else "Written, but: " + "; ".join(warnings) + ".")
         return cls._no_blank_lines("\n".join(sections)), status
@@ -1323,28 +1296,26 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # mode, duration, style, location, lighting, atmosphere,
         # camera_type, video_role, video_desc, video_retention,
         # video_audio, video_audio_desc
-        out = [MODES[0], 8.0, "", "", "", "", "", "none", "", "", "", ""]
-        out.append(0)                                 # speaker_count
-        for _ in range(MAX_SPEAKERS):
-            # name, presence, age, gender, pitch, timbre, rate, accent.
-            # Presence has no blank choice, so it resets to its default.
-            out += ["", "on-screen", "", "", "", "", "", ""]
-        out.append(0)                                 # subject_count
-        for _ in range(MAX_SUBJECTS):
-            out += ["Subject", "", "", "", "fully_preserved", "", ""]
-        out += [[], "", 1]                            # task_types, summary, shot_count
+        out = [8.0, "", "", "", "", "", "none", "", "", "", ""]
+        out.append(0)                                 # entry_count
+        for _ in range(MAX_ENTRIES):
+            # kind, desc, speaker, presence, age, gender, pitch, timbre,
+            # rate, accent, source, retention, note, shots
+            out += ["Subject", "", "", "", "", "", "", "", "", "",
+                    "", "", "", ""]
+        # task_types, retention_na, summary, shot_count
+        out += [[], False, "", 1]
         for si in range(MAX_SHOTS):
             # cut, cutverb, framing, lens, motion, ampl, speed, anchor, beats
             out += ["opening" if si == 0 else None, "-" if si == 0 else "",
                     "", "", "", "", "", "", 0]
-            out += ["action", "", "English", "", "", False] * MAX_BEATS
+            out += ["action", [], "English", "", "", None, False] * MAX_BEATS
         # soundscape_presets, soundscape, music_presets, music, music_none
         out += [[], "", [], "", True]
 
-        # Re-hide every slot: speakers, subjects, shots, then beats.
+        # Re-hide every slot: entries, shots, then beats.
         # Shot 1 stays visible because a prompt always has at least one.
-        out += [gr.update(visible=False)] * MAX_SPEAKERS
-        out += [gr.update(visible=False)] * MAX_SUBJECTS
+        out += [gr.update(visible=False)] * MAX_ENTRIES
         out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
         out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
         return out

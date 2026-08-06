@@ -1,6 +1,6 @@
 {
     "name": "MiniMax H3 Prompt Builder",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Builds MiniMax H3 prompts in the six-section format. One combined cast and subjects list, ordered beats with intra-shot timing, explicit speaker assignment, retention markers and task-type prefixes.",
     "author": "JedsDeadBaby",
     "date": "2026-08-02",

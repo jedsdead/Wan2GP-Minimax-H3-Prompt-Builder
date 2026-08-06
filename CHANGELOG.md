@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-08-02
+
+### Added
+
+- **Language per speaker.** Each cast entry has a language dropdown, defaulting
+  to English and accepting typed values. The beat-level language becomes an
+  override, so a bilingual cast needs no per-line fiddling.
+- **Rig, as a third camera axis** alongside framing and motion — tripod,
+  handheld, shoulder rig, steadicam, gimbal, dolly track, crane, jib, drone,
+  cable cam, car and hood mounts, slider, motion control, underwater housing.
+  A rig is how the camera is mounted, not what it does, so it reads as a
+  trailing clause: *"The camera pushes in slowly, on a steadicam."*
+- **A few movements the guide's table lacks** — full 360 orbit, spiral, dolly
+  zoom, crash and snap zooms, whip pan, rack focus, trail and lead. The guide's
+  own table is listed first; these read as ordinary English but aren't part of
+  the trained camera vocabulary. Moves named after rigs are deliberately absent,
+  since a dolly in is Push In, a dolly left is Truck Left, and a 360 is an Arc
+  Shot.
+- **Many more style presets**, covering live-action genres, movements and eras
+  alongside animation and illustrative styles.
+- Expanded presets throughout: framings, cut verbs, locations, lighting,
+  atmosphere, soundscape, music, voice timbre, rate and age.
+
+### Changed
+
+- The first beat of a shot takes a timestamp again. A shot cutting at 4s can
+  have its first action at 4.5s, so the shot's cut time doesn't stand in for it.
+
 ## [1.1.0] — 2026-08-02
 
 First public release.

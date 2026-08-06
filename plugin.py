@@ -67,28 +67,68 @@ KEYFRAME_NOTE = (
 )
 
 STYLES = [
-    "", "Live-action, cinematic", "Live-action, documentary",
-    "Observational documentary", "2D-animated", "3D CG", "Claymation",
-    "Watercolour", "Vintage film", "Music-video", "Multi-camera sitcom",
-    "Handheld, naturalistic", "Stop-motion",
+    "",
+    # live action, general
+    "Live-action, cinematic", "Live-action, documentary",
+    "Observational documentary", "Handheld, naturalistic",
+    "Multi-camera sitcom", "Music-video", "Vintage film",
+    "Home-video footage", "Found-footage", "Mockumentary",
+    "Security-camera footage", "Newsreel",
+    # live action, genre
+    "Neo-noir", "Film noir", "Western", "Spaghetti western",
+    "War epic", "Historical epic", "Period drama", "Courtroom drama",
+    "Heist thriller", "Spy thriller", "Psychological thriller",
+    "Slasher horror", "Cosmic horror", "Body horror", "Gothic horror",
+    "Science-fiction epic", "Cyberpunk", "Steampunk", "Post-apocalyptic",
+    "Dystopian", "Space opera", "Creature feature", "Disaster movie",
+    "Superhero blockbuster", "Action blockbuster", "Martial-arts film",
+    "Romantic comedy", "Screwball comedy", "Coming-of-age drama",
+    "Road movie", "Sports drama", "Biopic", "Musical", "Fantasy epic",
+    "French New Wave", "Italian neorealism", "Kitchen-sink realism",
+    "German expressionism", "Silent film", "Technicolor melodrama",
+    "1970s New Hollywood", "1980s VHS aesthetic", "Surrealist film",
+    # animation
+    "2D-animated", "Hand-painted anime film", "Cel-shaded anime",
+    "Modern 3D animated feature", "1990s 2D animated feature",
+    "1930s rubber-hose cartoon", "Saturday-morning cartoon",
+    "Adult animated comedy", "Stop-motion", "Claymation",
+    "Puppet animation", "Papercraft animation", "Rotoscoped animation",
+    "Motion comic", "Pixel-art animation", "Silhouette animation",
+    # illustrative and rendered
+    "Watercolour", "Oil-painted", "Charcoal sketch", "Ink and wash",
+    "Comic-book panel", "Graphic-novel", "Storyboard sketch",
+    "3D CG", "Photorealistic render", "Low-poly render", "Wireframe render",
 ]
 
 FRAMINGS = [
     "", "an extreme close-up", "a close-up", "a medium close-up",
     "a medium shot", "a medium-wide shot", "a wide shot",
-    "an establishing shot", "a two-shot", "an over-the-shoulder shot",
-    "a low-angle shot", "a high-angle shot", "an overhead shot",
-    "a point-of-view shot", "a profile shot",
+    "an extreme wide shot", "an establishing shot", "a two-shot",
+    "a three-shot", "an over-the-shoulder shot", "a low-angle shot",
+    "a high-angle shot", "an overhead shot", "a worm's-eye view",
+    "a dutch-angle shot", "a point-of-view shot", "a profile shot",
+    "a silhouette shot", "an insert shot", "a cutaway", "a master shot",
+    "a reflection shot", "a through-the-window shot",
 ]
 
 # Fixed vocabulary from the guide's camera table. Not user-extendable:
 # the model was trained on these exact expressions.
+# The guide's own camera table - the expressions the model was trained on -
+# followed by a short group of movements the table lacks. Rigs live in RIGS
+# below: a dolly, crane, drone or steadicam is how the camera is mounted, not
+# what it does, and several "moves" named after rigs are just spec moves under
+# another name (a dolly in is Push In, a dolly left is Truck Left, a 360 is an
+# Arc Shot).
 MOTION_TYPES = [
     "", "Zoom In", "Zoom Out", "Push In", "Pull Out", "Pan Left", "Pan Right",
     "Truck Left", "Truck Right", "Tilt Up", "Tilt Down", "Pedestal Up",
     "Pedestal Down", "Arc Shot", "Tracking Shot", "Static Shot",
     "Shake Slightly", "Shake Strongly", "POV", "Roll Clockwise",
     "Roll Counterclockwise",
+    # --- beyond the guide's table ---
+    "Full 360 Orbit", "Spiral Around Subject", "Dolly Zoom",
+    "Crash Zoom In", "Snap Zoom Out", "Whip Pan", "Rack Focus",
+    "Trail Behind Subject", "Lead Subject Backwards", "Locked Off",
 ]
 
 # How each motion type reads as a verb phrase after "The camera ...".
@@ -98,7 +138,8 @@ MOTION_VERBS = {
     "Pan Left": "pans left", "Pan Right": "pans right",
     "Truck Left": "trucks left", "Truck Right": "trucks right",
     "Tilt Up": "tilts up", "Tilt Down": "tilts down",
-    "Pedestal Up": "rises on the pedestal", "Pedestal Down": "lowers on the pedestal",
+    "Pedestal Up": "rises on the pedestal",
+    "Pedestal Down": "lowers on the pedestal",
     "Arc Shot": "moves in an arc around the subject",
     "Tracking Shot": "tracks the subject",
     "Static Shot": "holds a static shot",
@@ -106,26 +147,64 @@ MOTION_VERBS = {
     "POV": "takes the subject's point of view",
     "Roll Clockwise": "rolls clockwise",
     "Roll Counterclockwise": "rolls counterclockwise",
+    # --- beyond the guide's table ---
+    "Full 360 Orbit": "makes a full 360-degree orbit around the subject",
+    "Spiral Around Subject": "spirals around the subject",
+    "Dolly Zoom": "performs a dolly zoom",
+    "Crash Zoom In": "crash zooms in", "Snap Zoom Out": "snap zooms out",
+    "Whip Pan": "whip pans", "Rack Focus": "racks focus",
+    "Trail Behind Subject": "trails behind the subject",
+    "Lead Subject Backwards": "leads the subject backwards",
+    "Locked Off": "holds a locked-off frame",
 }
+
+# How the camera is mounted. Written as a trailing clause on the camera
+# sentence: "The camera pushes in slowly, mounted on a drone."
+RIGS = [
+    "", "on a tripod", "handheld", "on a shoulder rig", "on a steadicam",
+    "on a gimbal", "on a dolly track", "on a crane", "on a jib arm",
+    "on a drone", "on a cable cam", "on a car mount", "on a hood mount",
+    "on a slider", "on a motion-control rig", "in an underwater housing",
+    "body-mounted to the subject", "mounted to a moving vehicle",
+    "hand-passed between operators", "on a rickshaw rig",
+]
 
 AMPLITUDES = ["", "with small amplitude", "with large amplitude"]
 SPEEDS = ["", "at slow speed", "at fast speed"]
 
 CUT_VERBS = [
-    "the camera cuts to", "the shot cuts to", "the shot transitions to",
+    "the camera cuts to", "the shot cuts to", "the shot hard-cuts to",
+    "the shot smash-cuts to", "the shot match-cuts to",
+    "the shot jump-cuts to", "the shot transitions to",
     "the shot changes to", "the shot switches to",
-    "the shot cross-dissolves to", "the shot fades to", "the shot wipes to",
+    "the shot cross-dissolves to", "the shot dissolves to",
+    "the shot fades to", "the shot wipes to", "the shot whip-pans to",
+    "the shot irises to", "the shot cuts away to",
 ]
 
-LANGUAGES = ["English", "Chinese", "Japanese", "Korean", "Spanish", "French",
-             "German", "Italian", "Portuguese", "Russian", "Arabic", "Hindi"]
+LANGUAGES = [
+    "English", "Mandarin Chinese", "Cantonese", "Japanese", "Korean",
+    "Spanish", "French", "German", "Italian", "Portuguese", "Dutch",
+    "Russian", "Polish", "Ukrainian", "Czech", "Greek", "Turkish",
+    "Arabic", "Hebrew", "Farsi", "Hindi", "Urdu", "Bengali", "Tamil",
+    "Thai", "Vietnamese", "Indonesian", "Tagalog", "Swahili", "Yoruba",
+    "Swedish", "Norwegian", "Danish", "Finnish", "Icelandic",
+    "Irish", "Welsh", "Scottish Gaelic", "Latin",
+]
 
-VOICE_AGES = ["", "child", "teenage", "young", "middle-aged", "older", "elderly"]
+VOICE_AGES = ["", "child", "teenage", "young", "young adult", "middle-aged",
+              "older", "elderly", "ageless"]
 VOICE_GENDERS = ["", "female", "male", "androgynous"]
 VOICE_PITCH = ["", "low", "medium", "high"]
-VOICE_TIMBRE = ["", "clear", "raspy", "breathy", "warm", "nasal", "gravelly",
-                "bright", "weathered", "smooth"]
-VOICE_RATE = ["", "slow", "measured", "unhurried", "quick", "clipped", "halting"]
+VOICE_TIMBRE = [
+    "", "clear", "raspy", "breathy", "warm", "nasal", "gravelly", "bright",
+    "weathered", "smooth", "resonant", "reedy", "husky", "thin", "rich",
+    "hoarse", "silky", "grainy", "booming", "wavering", "metallic",
+]
+VOICE_RATE = [
+    "", "slow", "measured", "unhurried", "deliberate", "quick", "rapid",
+    "clipped", "halting", "breathless", "drawling", "steady", "urgent",
+]
 
 # Reference mode -----------------------------------------------------------
 
@@ -149,6 +228,13 @@ TASK_TYPES = ["keyframe completion", "reference generation", "video editing",
 # all visual description inside integrated_multimodal_description.
 
 LOCATIONS = [
+    "a rain-slicked alley behind a nightclub", "a farmhouse kitchen at dawn",
+    "an airport departure lounge", "a lighthouse gallery in a storm",
+    "a disused swimming pool", "a rooftop garden above the city",
+    "an antique shop crowded with clocks", "a motorway service station at night",
+    "a boat deck on open water", "a stone chapel lit by candles",
+    "a launderette at closing time", "a records archive in a basement",
+    "a ski lift above treeline", "a bustling New York street at dusk",
     "a covered market hall", "a late-night launderette", "a tiled underpass",
     "a rain-soaked city street", "a suburban kitchen", "a hotel corridor",
     "a crowded subway platform", "a quiet library reading room",
@@ -161,6 +247,11 @@ LOCATIONS = [
 ]
 
 SCENE_LIGHTING = [
+    "a single bare bulb", "car headlights sweeping across",
+    "television glow in a dark room", "shafts of light through blinds",
+    "the cold blue of a screen", "stage lighting from above",
+    "a red safelight", "lightning flashes", "sodium streetlight",
+    "sunrise backlight through haze",
     "golden hour light", "blue hour light", "harsh midday sun",
     "soft overcast light", "moody low-key lighting", "high-key lighting",
     "flickering candlelight", "neon glow", "a backlit silhouette",
@@ -171,6 +262,9 @@ SCENE_LIGHTING = [
 ]
 
 SCENE_ATMOSPHERE = [
+    "torrential rain", "sea spray", "ash falling", "petals drifting",
+    "insects circling a lamp", "condensation on every surface",
+    "a low ground mist", "sunbeams cutting through dust",
     "thick fog", "light mist", "drizzling rain", "heavy rain",
     "drifting dust", "smoke haze", "floating particles", "still, calm air",
     "gusting wind", "humid haze", "crisp clear air", "falling snow",
@@ -205,6 +299,12 @@ LENS_TYPES = [
 # -- Audio presets ----------------------------------------------------------
 
 SOUNDSCAPE_PRESETS = [
+    "wind across an open field", "rain on a tin roof",
+    "a kettle coming to the boil", "a fridge humming in a quiet kitchen",
+    "seagulls over a harbour", "an aircraft passing overhead",
+    "keyboard tapping and chair creaks", "a crowd in a stadium",
+    "hooves on cobblestones", "a clock chiming the hour",
+    "surf dragging over shingle", "a generator running outside",
     "room tone and distant traffic", "rain against windows",
     "wind through trees", "birdsong and rustling leaves",
     "waves against a shoreline", "a crackling fire",
@@ -218,6 +318,16 @@ SOUNDSCAPE_PRESETS = [
 ]
 
 MUSIC_PRESETS = [
+    "a lone cello line held under the scene",
+    "pulsing synth arpeggios building slowly",
+    "a plaintive solo violin",
+    "muted horns over a slow drum shuffle",
+    "distant church organ",
+    "a music-box melody, slightly out of tune",
+    "heavy orchestral brass swells",
+    "fingerpicked banjo at a walking pace",
+    "an ominous low drone with occasional percussion hits",
+    "bright pizzicato strings",
     "sparse solo piano at a slow tempo",
     "a low sustained string drone",
     "a walking double bass with brushed drums",
@@ -381,6 +491,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             e_rate = dd(VOICE_RATE, "Rate")
                             e_accent = gr.Textbox(label="Accent (optional)")
                         with gr.Row():
+                            e_lang = gr.Dropdown(
+                                LANGUAGES, label="Language", value="English",
+                                allow_custom_value=True,
+                                info="Used for this speaker's dialogue tags",
+                            )
+                        with gr.Row():
                             e_source = gr.Textbox(
                                 label="Source asset (optional)",
                                 placeholder="Picture 1",
@@ -401,6 +517,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         "speaker": e_speaker, "onscreen": e_onscreen,
                         "age": e_age, "gender": e_gender, "pitch": e_pitch,
                         "timbre": e_timbre, "rate": e_rate, "accent": e_accent,
+                        "lang": e_lang,
                         "source": e_source, "retention": e_retention,
                         "note": e_note, "shots": e_shots,
                     })
@@ -478,6 +595,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             sh_motion = locked_dd(MOTION_TYPES, "Camera motion")
                             sh_ampl = locked_dd(AMPLITUDES, "Amplitude")
                             sh_speed = locked_dd(SPEEDS, "Speed")
+                            sh_rig = dd(RIGS, "Rig")
                         sh_anchor = gr.Textbox(
                             label="Anchor - composition and what is in frame",
                             placeholder="a fishmonger behind a crushed-ice counter in a covered market hall",
@@ -501,9 +619,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                         info="Speaker IDs are added "
                                              "automatically where they apply",
                                     )
-                                    b_lang = gr.Dropdown(LANGUAGES,
-                                                         label="Language",
-                                                         value="English")
+                                    b_lang = gr.Dropdown(
+                                        [""] + LANGUAGES,
+                                        label="Language override",
+                                        value="", allow_custom_value=True,
+                                        info="Blank uses the speaker's language",
+                                    )
                                 b_action = gr.Textbox(
                                     label="Action / delivery (outside <d>)",
                                     placeholder="turns her head and says",
@@ -554,7 +675,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     shots.append({
                         "group": sgrp, "cut": sh_cut, "cutverb": sh_cutverb,
                         "framing": sh_framing, "lens": sh_lens,
-                        "motion": sh_motion,
+                        "motion": sh_motion, "rig": sh_rig,
                         "ampl": sh_ampl, "speed": sh_speed,
                         "anchor": sh_anchor, "beat_count": beat_count,
                         "beats": beats,
@@ -615,13 +736,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         for e in entries:
             flat += [e["kind"], e["desc"], e["speaker"], e["onscreen"],
                      e["age"], e["gender"], e["pitch"], e["timbre"],
-                     e["rate"], e["accent"], e["source"], e["retention"],
-                     e["note"], e["shots"]]
+                     e["rate"], e["accent"], e["lang"], e["source"],
+                     e["retention"], e["note"], e["shots"]]
         flat += [task_types, retention_na, summary_text, shot_count]
         for s in shots:
             flat += [s["cut"], s["cutverb"], s["framing"], s["lens"],
-                     s["motion"], s["ampl"], s["speed"], s["anchor"],
-                     s["beat_count"]]
+                     s["motion"], s["ampl"], s["speed"], s["rig"],
+                     s["anchor"], s["beat_count"]]
             for b in s["beats"]:
                 flat += [b["type"], b["speaker"], b["lang"], b["action"],
                          b["speech"], b["at"], b["carries"]]
@@ -841,20 +962,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return " ".join(parts)
 
     @classmethod
-    def _camera_clause(cls, motion, ampl, speed):
+    def _camera_clause(cls, motion, ampl, speed, rig=None):
         motion = cls._s(motion)
-        if not motion:
+        rig = cls._s(rig)
+        if not motion and not rig:
             return ""
-        verb = MOTION_VERBS.get(motion, motion.lower())
-        extras = [cls._s(ampl), cls._s(speed)]
-        extras = [e for e in extras if e]
-        clause = f"The camera {verb}"
-        if extras:
-            clause += " " + " ".join(extras)
+
+        if motion:
+            verb = MOTION_VERBS.get(motion, motion.lower())
+            clause = f"The camera {verb}"
+            extras = [e for e in [cls._s(ampl), cls._s(speed)] if e]
+            if extras:
+                clause += " " + " ".join(extras)
+            if rig:
+                clause += f", {rig}"
+        else:
+            # A rig with no stated movement still says something useful.
+            clause = f"The camera is {rig}"
         return clause + "."
 
     @classmethod
-    def _beat_text(cls, beat, label_for, lang_default="English"):
+    def _beat_text(cls, beat, label_for, lang_for=None, lang_default="English"):
         """
         A beat refers to subjects by label. Descriptions live in
         subject_definitions, so the shot text stays short and the same
@@ -862,10 +990,19 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         """
         action = cls._s(beat["action"])
         speech = cls._s(beat["speech"])
-        lang = cls._s(beat["lang"]) or lang_default
-
         who = beat["speaker"]
         picked = who if isinstance(who, (list, tuple)) else ([who] if who else [])
+
+        # The beat's language overrides; otherwise the first speaker's own
+        # language is used, so a bilingual cast needs no per-line fiddling.
+        lang = cls._s(beat["lang"])
+        if not lang:
+            lang_for = lang_for or {}
+            for p in picked:
+                lang = lang_for.get(cls._s(p), "")
+                if lang:
+                    break
+        lang = lang or lang_default
         labels = [label_for.get(cls._s(p), "") for p in picked]
         labels = [l for l in labels if l]
 
@@ -900,7 +1037,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return lead + ("" if lead.endswith(".") else ".")
 
     @classmethod
-    def _shot_text(cls, idx, shot, label_for):
+    def _shot_text(cls, idx, shot, label_for, lang_for=None):
         anchor = cls._s(shot["anchor"])
         framing = cls._s(shot["framing"])
         head = f"[Shot {idx + 1}]"
@@ -931,12 +1068,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 lead += f" of {anchor}"
             body = [lead.rstrip(".") + "."]
 
-        cam = cls._camera_clause(shot["motion"], shot["ampl"], shot["speed"])
+        cam = cls._camera_clause(shot["motion"], shot["ampl"], shot["speed"],
+                                 shot.get("rig"))
         if cam:
             body.append(cam)
 
         for beat in shot["beats"]:
-            text = cls._beat_text(beat, label_for)
+            text = cls._beat_text(beat, label_for, lang_for or {})
             if text:
                 body.append(text)
 
@@ -978,8 +1116,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "kind": take(), "desc": take(), "speaker": take(),
                 "onscreen": take(), "age": take(), "gender": take(),
                 "pitch": take(), "timbre": take(), "rate": take(),
-                "accent": take(), "source": take(), "retention": take(),
-                "note": take(), "shots": take(),
+                "accent": take(), "lang": take(), "source": take(),
+                "retention": take(), "note": take(), "shots": take(),
             })
 
         task_types = take()
@@ -992,7 +1130,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             shot = {
                 "cut": take(), "cutverb": take(), "framing": take(),
                 "lens": take(), "motion": take(), "ampl": take(),
-                "speed": take(), "anchor": take(), "beat_count": take(),
+                "speed": take(), "rig": take(), "anchor": take(),
+                "beat_count": take(),
                 "beats": [],
             }
             for _ in range(MAX_BEATS):
@@ -1158,6 +1297,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         counters = {k: 0 for k in ASSET_KINDS}
         defs, retention = [], []
         label_for = {}          # "Subject 3" -> "<Subject 3> (S1)"
+        lang_for = {}           # "Subject 3" -> "Japanese"
         skipped = 0
         uses_reference_assets = False
 
@@ -1175,6 +1315,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             speaker = cls._s(e["speaker"])
             def_label = f"{label} ({speaker})" if speaker else label
             label_for[f"Subject {idx + 1}"] = def_label
+            lang_for[f"Subject {idx + 1}"] = cls._s(e["lang"]) or "English"
 
             # The description lives here, so the shot text can just use the
             # label - which is what keeps a subject consistent across shots.
@@ -1209,7 +1350,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         opening = cls._opening_clause(style, location, lighting,
                                       atmosphere, camera_type, duration)
 
-        shot_lines = [cls._shot_text(n, s, label_for)
+        shot_lines = [cls._shot_text(n, s, label_for, lang_for)
                       for n, s in enumerate(shots)]
         body = "\n".join(l for l in ([opening] + shot_lines) if l.strip())
 
@@ -1300,16 +1441,17 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         out.append(0)                                 # entry_count
         for _ in range(MAX_ENTRIES):
             # kind, desc, speaker, presence, age, gender, pitch, timbre,
-            # rate, accent, source, retention, note, shots
+            # rate, accent, lang, source, retention, note, shots
             out += ["Subject", "", "", "", "", "", "", "", "", "",
-                    "", "", "", ""]
+                    "English", "", "", "", ""]
         # task_types, retention_na, summary, shot_count
         out += [[], False, "", 1]
         for si in range(MAX_SHOTS):
-            # cut, cutverb, framing, lens, motion, ampl, speed, anchor, beats
+            # cut, cutverb, framing, lens, motion, ampl, speed, rig,
+            # anchor, beats
             out += ["opening" if si == 0 else None, "-" if si == 0 else "",
-                    "", "", "", "", "", "", 0]
-            out += ["action", [], "English", "", "", None, False] * MAX_BEATS
+                    "", "", "", "", "", "", "", 0]
+            out += ["action", [], "", "", "", None, False] * MAX_BEATS
         # soundscape_presets, soundscape, music_presets, music, music_none
         out += [[], "", [], "", True]
 

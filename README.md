@@ -134,8 +134,12 @@ every shot — which is the main thing that keeps them consistent.
 shots take a cut time and a transition, written as `[Shot 2] At 00:04.000, the
 shot cuts to …`.
 
-Each shot has framing, a lens, a camera triple (motion, amplitude, speed) and an
-anchor describing what's in frame. Each shot starts on its own line in the
+Each shot has framing, a lens, a camera triple (motion, amplitude, speed), a rig
+and an anchor describing what's in frame.
+
+Framing, motion and rig are three separate axes: where the camera is, what it
+does, and how it's mounted. A dolly in is Push In on a dolly track; a 360 is an
+Arc Shot; a drone shot is any motion at all, on a drone. Each shot starts on its own line in the
 output.
 
 ### Beats

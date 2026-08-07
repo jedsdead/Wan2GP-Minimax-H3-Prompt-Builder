@@ -5,6 +5,51 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-08-07
+
+### Added
+
+- **Colour grade** dropdown in the Scene row, written into the opening line.
+- **Score genres and screen-music styles** at the top of the music presets —
+  orchestral, thriller, horror, synth, western, noir jazz, period, war, heist,
+  spy, superhero, documentary, sitcom, anime, silent film and more, ahead of
+  the texture entries. 72 presets in total.
+- A standing note above the buttons, and a line in the status message, asking
+  you to read the prompt for grammar before generating — fields are stitched
+  into sentences from templates, so your wording may not agree with the
+  phrasing around it (*"a woman faces the door"* where *facing* was needed).
+
+### Changed
+
+- **One reference-mode switch.** The per-entry "Is a referenced subject"
+  checkbox is replaced by a single **Use reference mode (Ref2VA)** checkbox at
+  the top, which reveals the reference block on every entry along with the
+  Reference task section. Unticked, none of it is written.
+- **Source video moved inside Reference task**, so it appears and disappears
+  with the rest of the reference options.
+- The task-type reminder now fires only when reference mode is on, rather than
+  whenever a description happened to look like a reference.
+
+### Fixed
+
+- A beat with no time set no longer emits `At 00:00.000`. Empty number inputs
+  can come back as `None`, `""` or `0`, and a beat at zero is the start of the
+  clip, which the shot already implies — all three now count as unset.
+- The **audio reference fields** for soundscape and music were the last
+  reference controls left permanently visible. They now follow the reference
+  switch like everything else, and are ignored by the assembly when it's off.
+- Those fields sat *above* their own textboxes; they now sit beneath them.
+- The **Draft summary** notes no longer mention task types or source videos
+  when reference mode is off, since neither applies there.
+- The end-image note said "the final beat of the last shot", which doesn't help
+  if that shot has no beats. It now says the end of the last shot — its final
+  beat, or its anchor.
+
+### Changed
+
+- The soundscape and music free-text fields are labelled **custom / additional
+  information** rather than "added after the presets".
+
 ## [1.2.0] — 2026-08-07
 
 ### Added

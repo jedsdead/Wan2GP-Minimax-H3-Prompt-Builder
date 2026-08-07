@@ -14,7 +14,8 @@ character is a subject whether or not a reference asset backs it.
 
 Keyframe images are attached in the generator, not here, and the model
 associates them with the prompt positionally: a start image is described in
-Shot 1's anchor, an end image in the final beat of the last shot.
+Shot 1's anchor, an end image at the end of the last shot - its final
+beat, or its anchor if it has no beats.
 
 The builder owns the mechanical parts: angle-bracket reference tags, shot
 timestamps, intra-shot beat timing, speaker IDs, <d> wrapping, retention
@@ -68,7 +69,8 @@ H3_MODEL_HINTS = ("minimax", "h3")
 KEYFRAME_NOTE = (
     "Keyframe images are attached in the generator, not here. If you are "
     "starting from an image, describe it in **Shot 1's anchor**. If you have "
-    "an end image, describe it in the **final beat of the last shot**. "
+    "an end image, describe it at the **end of the last shot** - its final "
+    "beat, or its anchor if that shot has no beats. "
     "Reference labels like `<Picture 1>` resolve to the images loaded above, "
     "in order."
 )
@@ -229,6 +231,20 @@ REF_AUDIO_SLOTS = ["", "Audio 1", "Audio 2"]
 # _ref_tags() adds the angle brackets on the way out.
 REF_PICTURE_SLOTS = [f"Picture {n + 1}" for n in range(9)]
 
+GRADING = [
+    "", "a vibrant colour grade", "a muted colour grade",
+    "a high-contrast grade", "a low-contrast grade",
+    "a teal-and-orange grade", "a bleach-bypass grade",
+    "a warm vintage film grade", "a cool desaturated grade",
+    "a pastel low-contrast grade", "a faded retro grade",
+    "a rich saturated technicolor grade", "a sepia-toned grade",
+    "a cross-processed grade", "a neon cyberpunk grade",
+    "a sun-bleached grade", "a cold blue-grey grade",
+    "a moody green-tinted grade", "a monochrome grade",
+    "a high-key bright grade", "a crushed-blacks grade",
+    "an amber golden grade", "a silver-halide grade",
+]
+
 # What an audio reference controls. The guide treats these as distinct roles:
 # a voice reference names its speaker, a music-style reference belongs to the
 # music layer, and a beat reference controls timing without instrumentation.
@@ -345,6 +361,56 @@ SOUNDSCAPE_PRESETS = [
 ]
 
 MUSIC_PRESETS = [
+    # --- score genres and screen-music styles ---
+    "a sweeping orchestral adventure score",
+    "a brooding orchestral drama score",
+    "a soaring romantic string score",
+    "a tense thriller score with pulsing ostinato strings",
+    "a horror score with dissonant strings and sudden stingers",
+    "a slasher-film synth score",
+    "a stalking analogue synth pulse",
+    "an 1980s retro-synthwave score",
+    "a cyberpunk industrial synth score",
+    "a science-fiction score with choir and low brass",
+    "a fantasy score with harp, horns and choir",
+    "a western score with lone guitar, whistle and trumpet",
+    "a spaghetti-western score with twanging guitar and vocal wails",
+    "a noir jazz score with muted trumpet and brushed drums",
+    "a smoky late-night saxophone score",
+    "a French New Wave score with light jazz piano",
+    "an Italian neorealist score with mournful accordion",
+    "a period-drama chamber score with strings and piano",
+    "a baroque harpsichord score",
+    "a war-film score with martial snare and low brass",
+    "a heist score with cool bass groove and hi-hats",
+    "a spy-thriller score with surf guitar and brass stabs",
+    "a superhero score with heroic brass fanfare",
+    "a disaster-movie score with rising brass and timpani",
+    "a courtroom-drama score with restrained piano",
+    "a sports-montage score with driving drums and brass",
+    "a coming-of-age score with warm indie guitars",
+    "an indie-film score with fingerpicked acoustic guitar",
+    "a mumblecore score with lo-fi bedroom pop",
+    "a road-movie score with slide guitar and harmonica",
+    "a documentary score with minimal piano and strings",
+    "a nature-documentary score with wide orchestral awe",
+    "a true-crime score with cold synth drones",
+    "a sitcom score with bright brassy stings",
+    "a soap-opera score with lush melodrama strings",
+    "a children's-animation score with playful woodwinds",
+    "an anime score with emotive piano and strings",
+    "a magical-girl anime score with bells and bright synths",
+    "a video-game cinematic score with hybrid orchestra and percussion",
+    "a silent-film score with rollicking piano",
+    "a musical-theatre score with full pit orchestra",
+    "a Bollywood score with tabla, strings and vocals",
+    "a Nordic-noir score with icy ambient textures",
+    "a pastoral animation score with piano and woodwinds",
+    "a minimalist score with repeating arpeggios",
+    "a post-rock crescendo with building guitars and drums",
+    "a trailer score with braams and rising percussion",
+    "an end-credits score with reflective piano and strings",
+    # --- textures and small ensembles ---
     "a lone cello line held under the scene",
     "pulsing synth arpeggios building slowly",
     "a plaintive solo violin",
@@ -434,10 +500,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             gr.Markdown(KEYFRAME_NOTE)
 
+            ref_mode = gr.Checkbox(
+                label="Use reference mode (Ref2VA)",
+                value=False,
+                info="Reveals reference subjects, the source video and the "
+                     "task type. Leave unticked and none of it is written.",
+            )
+
             with gr.Row():
                 duration = gr.Number(label="Duration (seconds)", value=8.0,
                                      minimum=0.5, step=0.5)
                 style = dd(STYLES, "Style")
+                grading = dd(GRADING, "Colour grade")
 
             with gr.Row():
                 location = dd(LOCATIONS, "Location")
@@ -448,37 +522,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 camera_type = dd(CAMERA_TYPES, "Camera / stock")
 
             # ---- source video (FL2VA continue / Ref2VA video reference) ----
-            with gr.Accordion("Source video", open=False) as video_section:
-                video_role = gr.Radio(
-                    ["none", "continue from it", "edit it",
-                     "reference its camera and cutting only"],
-                    label="Role of an attached video", value="none",
-                )
-                video_desc = gr.Textbox(
-                    label="What the video contributes",
-                    placeholder="handheld camera movement and cutting rhythm",
-                )
-                video_retention = locked_dd(VISUAL_RETENTION,
-                                            "Retention (picture)")
-
-                gr.Markdown(
-                    "If the video's **audio** is being reused or referenced, "
-                    "set it below - audio uses a different marker set from "
-                    "picture, and gets its own <Audio N> label. Tick the "
-                    "matching task type (audio reuse, or audio reference).\n\n"
-                    "WanGP's Audio References selector is one dropdown, so "
-                    "**Use Reference-Video Soundtrack(s)** and standalone "
-                    "audio references are mutually exclusive - use this "
-                    "section or the audio slots, not both."
-                )
-                with gr.Row():
-                    video_audio = locked_dd(AUDIO_RETENTION,
-                                            "Retention (audio)")
-                    video_audio_desc = gr.Textbox(
-                        label="What the audio contributes",
-                        placeholder="the original spoken dialogue",
-                    )
-
             # ---- cast and subjects (one list) ------------------------------
             with gr.Accordion("Cast & subjects", open=True):
                 gr.Markdown(
@@ -527,10 +570,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 allow_custom_value=True,
                                 info="Used for this speaker's dialogue tags",
                             )
-                        e_is_ref = gr.Checkbox(
-                            label="Is a referenced subject (Ref2VA only)",
-                            value=False,
-                        )
                         with gr.Group(visible=False) as e_ref_block:
                             with gr.Row():
                                 e_source = gr.Dropdown(
@@ -565,17 +604,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                          "subject's movement or performance",
                                 )
 
-                        e_is_ref.change(
-                            fn=lambda t: gr.update(visible=bool(t)),
-                            inputs=[e_is_ref], outputs=[e_ref_block],
-                        )
                     entries.append({
                         "group": grp, "kind": e_kind, "desc": e_desc,
                         "speaker": e_speaker, "onscreen": e_onscreen,
                         "age": e_age, "gender": e_gender, "pitch": e_pitch,
                         "timbre": e_timbre, "rate": e_rate, "accent": e_accent,
                         "lang": e_lang,
-                        "is_ref": e_is_ref, "ref_block": e_ref_block,
+                        "ref_block": e_ref_block,
                         "source": e_source, "retention": e_retention,
                         "note": e_note, "shots": e_shots,
                         "voice_from": e_voice_from,
@@ -596,7 +631,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     inputs=[entry_count], outputs=_entry_out,
                 )
 
-            with gr.Accordion("Reference task", open=False) as ref_task_section:
+            with gr.Accordion("Reference task", open=False,
+                              visible=False) as ref_task_section:
                 gr.Markdown(
                     "Only needed when reference assets are involved. The task "
                     "type tells the model what kind of job this is, and is "
@@ -605,6 +641,38 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 task_types = gr.CheckboxGroup(
                     TASK_TYPES, label="Task type - combined with + in summary",
                 )
+
+                with gr.Accordion("Source video", open=False) as video_section:
+                    video_role = gr.Radio(
+                        ["none", "continue from it", "edit it",
+                         "reference its camera and cutting only"],
+                        label="Role of an attached video", value="none",
+                    )
+                    video_desc = gr.Textbox(
+                        label="What the video contributes",
+                        placeholder="handheld camera movement and cutting rhythm",
+                    )
+                    video_retention = locked_dd(VISUAL_RETENTION,
+                                                "Retention (picture)")
+
+                    gr.Markdown(
+                        "If the video's **audio** is being reused or referenced, "
+                        "set it below - audio uses a different marker set from "
+                        "picture, and gets its own <Audio N> label. Tick the "
+                        "matching task type (audio reuse, or audio reference).\n\n"
+                        "WanGP's Audio References selector is one dropdown, so "
+                        "**Use Reference-Video Soundtrack(s)** and standalone "
+                        "audio references are mutually exclusive - use this "
+                        "section or the audio slots, not both."
+                    )
+                    with gr.Row():
+                        video_audio = locked_dd(AUDIO_RETENTION,
+                                                "Retention (audio)")
+                        video_audio_desc = gr.Textbox(
+                            label="What the audio contributes",
+                            placeholder="the original spoken dialogue",
+                        )
+
 
             with gr.Accordion("Shots", open=True):
                 shot_count = gr.State(1)
@@ -737,19 +805,22 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     SOUNDSCAPE_PRESETS, label="Soundscape presets",
                     value=[], multiselect=True, allow_custom_value=True,
                 )
-                with gr.Row():
-                    ambience_from = gr.Dropdown(
-                        REF_AUDIO_SLOTS, label="Ambience from", value="",
-                        info="A reference audio supplying the ambient bed",
-                    )
-                    ambience_retention = gr.Dropdown(
-                        [""] + AUDIO_RETENTION, label="Retention", value="",
-                    )
                 soundscape = gr.Textbox(
-                    label="Soundscape - added after the presets",
+                    label="Soundscape - custom / additional information",
                     lines=2,
                     placeholder="A wide market-hall echo carries trolley wheels and distant haggling.",
                 )
+                # Reference fields sit under their own field and follow the
+                # Ref2VA switch, like every other reference control.
+                with gr.Group(visible=False) as ambience_ref_block:
+                    with gr.Row():
+                        ambience_from = gr.Dropdown(
+                            REF_AUDIO_SLOTS, label="Ambience from", value="",
+                            info="A reference audio supplying the ambient bed",
+                        )
+                        ambience_retention = gr.Dropdown(
+                            [""] + AUDIO_RETENTION, label="Retention", value="",
+                        )
                 gr.Markdown(
                     "Dialogue, singing and music the characters can hear "
                     "belong in a beat, not here."
@@ -758,21 +829,22 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     MUSIC_PRESETS, label="Music presets",
                     value=[], multiselect=True, allow_custom_value=True,
                 )
-                with gr.Row():
-                    music_from = gr.Dropdown(
-                        REF_AUDIO_SLOTS, label="Music from", value="",
-                        info="A reference audio supplying the score",
-                    )
-                    music_role = gr.Dropdown(
-                        MUSIC_REF_ROLES, label="It controls", value="style",
-                    )
-                    music_retention = gr.Dropdown(
-                        [""] + AUDIO_RETENTION, label="Retention", value="",
-                    )
                 music = gr.Textbox(
-                    label="Non-diegetic music - added after the presets",
+                    label="Non-diegetic music - custom / additional information",
                     lines=2,
                 )
+                with gr.Group(visible=False) as music_ref_block:
+                    with gr.Row():
+                        music_from = gr.Dropdown(
+                            REF_AUDIO_SLOTS, label="Music from", value="",
+                            info="A reference audio supplying the score",
+                        )
+                        music_role = gr.Dropdown(
+                            MUSIC_REF_ROLES, label="It controls", value="style",
+                        )
+                        music_retention = gr.Dropdown(
+                            [""] + AUDIO_RETENTION, label="Retention", value="",
+                        )
                 music_none = gr.Checkbox(label="No non-diegetic music (writes N/A)",
                                          value=True)
 
@@ -788,20 +860,29 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                               size="sm")
             summary_status = gr.Markdown("")
 
+            gr.Markdown(
+                "**Read the prompt before you generate.** Fields are stitched "
+                "into sentences from templates, so wording you enter may not "
+                "agree grammatically with the phrasing around it - "
+                "*\"the target video shows a woman faces the door\"* rather "
+                "than *facing*. The prompt box is editable; fixing it there "
+                "takes seconds and the model reads what you leave."
+            )
+
             with gr.Row():
                 insert_btn = gr.Button("Insert into prompt", variant="primary")
                 clear_btn = gr.Button("Clear all fields")
 
         # ---- wiring -------------------------------------------------------
 
-        flat = [duration, style, location, lighting, atmosphere,
+        flat = [ref_mode, duration, style, grading, location, lighting, atmosphere,
                 camera_type,
                 video_role, video_desc, video_retention,
                 video_audio, video_audio_desc, entry_count]
         for e in entries:
             flat += [e["kind"], e["desc"], e["speaker"], e["onscreen"],
                      e["age"], e["gender"], e["pitch"], e["timbre"],
-                     e["rate"], e["accent"], e["lang"], e["is_ref"],
+                     e["rate"], e["accent"], e["lang"],
                      e["source"], e["retention"], e["note"], e["shots"],
                      e["voice_from"], e["motion_from"]]
         flat += [task_types, summary_text, shot_count]
@@ -820,6 +901,16 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         insert_btn.click(fn=self._build, inputs=flat,
                          outputs=[self.prompt, status])
 
+        # One switch for everything Ref2VA. Values in a hidden block are
+        # ignored by the assembly too, so nothing can leak in.
+        ref_blocks = ([ref_task_section]
+                      + [e["ref_block"] for e in entries]
+                      + [ambience_ref_block, music_ref_block])
+        ref_mode.change(
+            fn=lambda on: [gr.update(visible=bool(on))] * len(ref_blocks),
+            inputs=[ref_mode], outputs=ref_blocks,
+        )
+
         draft_summary_btn.click(
             fn=self._draft_summary, inputs=flat,
             outputs=[summary_text, summary_status],
@@ -827,6 +918,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         all_groups = (
             [e["group"] for e in entries]
             + [e["ref_block"] for e in entries]
+            + [ambience_ref_block, music_ref_block]
             + [s["group"] for s in shots]
         )
         for s in shots:
@@ -905,7 +997,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     @classmethod
     def _opening_clause(cls, style, location, lighting, atmosphere,
-                        camera_type, duration=None):
+                        camera_type, duration=None, grading=""):
         """
         One sentence establishing the whole clip, written before [Shot 1]:
         style, setting, light, air and camera body.
@@ -919,6 +1011,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             parts.append(f"lit by {lighting}")
         if atmosphere:
             parts.append(f"with {atmosphere}")
+        if grading:
+            parts.append(f"graded with {grading}"
+                         if not grading.startswith(("a ", "an ", "the "))
+                         else f"with {grading}")
         if camera_type:
             parts.append(f"shot on {camera_type}")
         if duration:
@@ -1098,7 +1194,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         labels = [label_for.get(cls._s(p), "") for p in picked]
         labels = [l for l in labels if l]
 
-        at = cls._timecode(beat.get("at")) if beat.get("at") not in (None, "") else None
+        # An empty Number can come back as None, "" or 0. A beat at 0.000 is
+        # the start of the clip, which the shot already implies, so all three
+        # count as unset and no timestamp is written.
+        raw_at = beat.get("at")
+        try:
+            unset = raw_at in (None, "") or float(raw_at) <= 0
+        except (TypeError, ValueError):
+            unset = True
+        at = None if unset else cls._timecode(raw_at)
         stamp = f"At {at}, " if at else ""
 
         if not labels:
@@ -1189,8 +1293,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             i += n
             return out[0] if n == 1 else out
 
+        ref_mode = bool(take())
         duration = take()
         style = cls._s(take())
+        grading = cls._s(take())
         location = cls._s(take())
         lighting = cls._s(take())
         atmosphere = cls._s(take())
@@ -1208,8 +1314,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "kind": take(), "desc": take(), "speaker": take(),
                 "onscreen": take(), "age": take(), "gender": take(),
                 "pitch": take(), "timbre": take(), "rate": take(),
-                "accent": take(), "lang": take(), "is_ref": take(),
-                "source": take(), "retention": take(), "note": take(),
+                "accent": take(), "lang": take(), "source": take(), "retention": take(), "note": take(),
                 "shots": take(), "voice_from": take(), "motion_from": take(),
             })
 
@@ -1247,7 +1352,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music_none = take()
 
         return dict(
-            duration=duration, style=style, location=location,
+            ref_mode=ref_mode, duration=duration, style=style,
+            grading=grading, location=location,
             lighting=lighting, atmosphere=atmosphere, camera_type=camera_type,
             video_role=video_role, video_desc=video_desc,
             video_retention=video_retention, video_audio=video_audio,
@@ -1356,12 +1462,17 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             sentences = []
 
         if not sentences:
-            return "", ("Nothing to summarise yet - add a shot anchor, a "
-                        "reference entry, or a source video first.")
+            # A source video is only a draftable input in reference mode, so
+            # only offer it as a suggestion there.
+            missing = ("a shot anchor, a subject, or a source video"
+                       if d["ref_mode"] else "a shot anchor or a subject")
+            return "", f"Nothing to summarise yet - add {missing} first."
 
         draft = " ".join(sentences)
+        # The task-type prefix only applies in reference mode, so only
+        # mention it there.
         note = ("Draft written - edit it so it reads as your own overview."
-                if prefix else
+                if prefix or not d["ref_mode"] else
                 "Draft written, but no **task type** is ticked, so the summary "
                 "will have no prefix.")
         return draft, note
@@ -1369,7 +1480,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
     @classmethod
     def _build(cls, *values):
         d = cls._unpack(values)
-        duration = d["duration"]; style = d["style"]
+        ref_mode = d["ref_mode"]; duration = d["duration"]
+        style = d["style"]; grading = d["grading"]
         location = d["location"]; lighting = d["lighting"]
         atmosphere = d["atmosphere"]; camera_type = d["camera_type"]
         video_role = d["video_role"]; video_desc = d["video_desc"]
@@ -1416,7 +1528,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # Reference fields only count when the entry is marked as a
             # referenced subject, so a stray value in a collapsed block
             # cannot leak into the prompt.
-            is_ref = bool(e.get("is_ref"))
+            is_ref = ref_mode
             source = cls._ref_tags(e["source"]) if is_ref else ""
             if not desc and not source:
                 skipped += 1
@@ -1475,7 +1587,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # lighting, atmosphere and camera body hold for the whole clip, so
         # they belong here rather than inside the opening shot.
         opening = cls._opening_clause(style, location, lighting,
-                                      atmosphere, camera_type, duration)
+                                      atmosphere, camera_type, duration,
+                                      grading)
 
         shot_lines = [cls._shot_text(n, s, label_for, lang_for)
                       for n, s in enumerate(shots)]
@@ -1514,7 +1627,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 f"{alabel}: {video_audio or 'reference'} - {what}."
             )
 
-        # Audio references for the ambient bed and the score.
+        # Audio references for the ambient bed and the score. Ignored unless
+        # reference mode is on, so a value left in a hidden block cannot leak
+        # into the prompt.
+        if not ref_mode:
+            ambience_from = music_from = ""
         if ambience_from:
             asset_roles.setdefault(ambience_from, []).append(
                 "the ambient-sound reference for the scene")
@@ -1566,12 +1683,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Only nag about a task type when something is actually referenced.
         # Subjects invented from description are not reference assets, and
         # most prompts have no task type at all.
-        uses_refs = uses_reference_assets or cls._s(video_role) not in ("", "none")
-
         warnings = []
-        if uses_refs and not prefix:
-            warnings.append("reference assets are in use but no **task type** "
-                            "is ticked")
+        # Only a reminder once reference mode is actually on.
+        if ref_mode and not prefix:
+            warnings.append("reference mode is on but no **task type** is "
+                            "ticked")
         if not summary_text:
             warnings.append("**summary** is empty")
         if skipped:
@@ -1596,9 +1712,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             "**audio slots** are set - WanGP lets you pick one "
                             "or the other")
 
-        status = ("Prompt written."
+        check = "Read it through for grammar before generating."
+        status = (f"Prompt written. {check}"
                   if not warnings
-                  else "Written, but: " + "; ".join(warnings) + ".")
+                  else "Written, but: " + "; ".join(warnings) + f". {check}")
         return cls._no_blank_lines("\n".join(sections)), status
 
     @staticmethod
@@ -1606,7 +1723,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # mode, duration, style, location, lighting, atmosphere,
         # camera_type, video_role, video_desc, video_retention,
         # video_audio, video_audio_desc
-        out = [8.0, "", "", "", "", "", "none", "", "", "", ""]
+        out = [False, 8.0, "", "", "", "", "", "", "none", "", "", "", ""]
         out.append(0)                                 # entry_count
         for _ in range(MAX_ENTRIES):
             # kind, desc, speaker, presence, age, gender, pitch, timbre,
@@ -1615,7 +1732,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # rate, accent, lang, is_ref, source, retention, note, shots,
             # voice_from, motion_from
             out += ["Subject", "", "", "", "", "", "", "", "", "",
-                    "English", False, [], "", "", "", "", ""]
+                    "English", [], "", "", "", "", ""]
         # task_types, summary, shot_count
         out += [[], "", 1]
         for si in range(MAX_SHOTS):
@@ -1633,6 +1750,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Shot 1 stays visible because a prompt always has at least one.
         out += [gr.update(visible=False)] * MAX_ENTRIES   # entry groups
         out += [gr.update(visible=False)] * MAX_ENTRIES   # reference blocks
+        out += [gr.update(visible=False)] * 2             # audio ref blocks
         out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
         out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
         return out

@@ -82,7 +82,8 @@ Keyframe images are attached in the generator, not here, and the model
 associates them with the prompt positionally:
 
 - **Start image** — describe it in **Shot 1's anchor**
-- **End image** — describe it in the **final beat of the last shot**
+- **End image** — describe it at the **end of the last shot**: its final
+  beat, or its anchor if that shot has no beats
 - **Reference images** — `<Picture 1>`, `<Picture 2>` resolve to the images
   loaded above, in order
 
@@ -95,8 +96,9 @@ model can interpolate between them.
 
 ### Scene
 
-Style, location, lighting, atmosphere and camera body — the things that hold
-for the whole clip. These become a single opening sentence before `[Shot 1]`.
+Style, colour grade, location, lighting, atmosphere and camera body — the
+things that hold for the whole clip. These become a single opening sentence
+before `[Shot 1]`.
 
 Lens and rig live with each shot instead, since both commonly change at a cut.
 
@@ -109,8 +111,9 @@ rather than repeating the description.
 Only the description is required. **Speaker** is assigned by you, not derived
 from position: if entry 2 is a car and entry 3 talks, entry 3 can be S2.
 
-Tick **Is a referenced subject (Ref2VA only)** to reveal the reference fields —
-they stay collapsed otherwise, and values left in a collapsed block are ignored
+Tick **Use reference mode (Ref2VA)** at the top of the panel to reveal the
+reference fields on every entry, along with the Reference task section. They
+stay collapsed otherwise, and values left in a collapsed block are ignored
 entirely rather than leaking into the prompt:
 
 - **Source asset** — which reference image the subject comes from, chosen from
@@ -153,14 +156,17 @@ Two fields, and which one a sound belongs in depends on a single question:
 - **Non-diegetic** — score only the audience hears
 
 Music playing on-screen is diegetic and belongs in a beat. Both fields have
-preset dropdowns and an optional audio reference with its own retention marker;
-the music reference also names what it controls (style, beat and rhythm,
-instrumentation, mood).
+preset dropdowns — the music presets lead with score genres and screen-music
+styles — and a free-text box for anything else.
+
+In reference mode each gains an audio reference beneath it with its own
+retention marker; the music reference also names what it controls (style, beat
+and rhythm, instrumentation, mood).
 
 ### Reference task
 
-Task type, which becomes the bracketed prefix on the summary. Only needed when
-reference assets are involved.
+Task type, which becomes the bracketed prefix on the summary, and the **Source
+video** section nested beneath it. Both appear only in reference mode.
 
 ### Summary
 
@@ -183,6 +189,11 @@ whatever you type.
 **No blank lines.** WanGP treats an empty line as a prompt separator, so every
 section sits on consecutive lines and blank lines typed into any field are
 stripped.
+
+**Read the output before generating.** Fields are stitched into sentences from
+templates, so wording you enter may not agree grammatically with the phrasing
+around it — *"the target video shows a woman faces the door"* rather than
+*facing*. The prompt box is editable.
 
 ---
 

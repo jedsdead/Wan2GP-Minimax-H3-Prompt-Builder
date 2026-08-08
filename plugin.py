@@ -845,8 +845,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         music_retention = gr.Dropdown(
                             [""] + AUDIO_RETENTION, label="Retention", value="",
                         )
-                music_none = gr.Checkbox(label="No non-diegetic music (writes N/A)",
-                                         value=True)
 
             status = gr.Markdown("")
 
@@ -902,7 +900,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         flat += [ambience_from, ambience_retention,
                  soundscape_presets, soundscape,
                  music_from, music_role, music_retention,
-                 music_presets, music, music_none]
+                 music_presets, music]
 
         insert_btn.click(fn=self._build, inputs=flat,
                          outputs=[self.prompt, status])
@@ -1372,7 +1370,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music_retention = cls._s(take())
         music_presets = cls._s(take())
         music = cls._s(take())
-        music_none = take()
 
         return dict(
             ref_mode=ref_mode, duration=duration, style=style,
@@ -1388,7 +1385,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             soundscape_presets=soundscape_presets, soundscape=soundscape,
             music_from=music_from, music_role=music_role,
             music_retention=music_retention,
-            music_presets=music_presets, music=music, music_none=music_none,
+            music_presets=music_presets, music=music,
         )
 
     @classmethod
@@ -1520,7 +1517,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music_from = d["music_from"]; music_role = d["music_role"]
         music_retention = d["music_retention"]
         music_presets = d["music_presets"]; music = d["music"]
-        music_none = d["music_none"]
 
         shots = shots[:max(1, shot_count)]
 
@@ -1643,12 +1639,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             lead="The scene carries {}.",
         ) or "N/A"
 
-        if music_none:
-            music_field = "N/A"
-        else:
-            music_field = cls._merge_audio(
-                music_presets, music, lead="{}.",
-            ) or "N/A"
+        # Empty means no score, which is what N/A says. No separate switch.
+        music_field = cls._merge_audio(music_presets, music, lead="{}.") or "N/A"
 
         video_label = ""
         if video_role != "none" and video_desc:
@@ -1802,9 +1794,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     "", "", "", "", "", "", "", 0]
             out += ["action", [], "", "", "", None, False] * MAX_BEATS
         # ambience_from, ambience_retention, soundscape_presets, soundscape,
-        # music_from, music_role, music_retention, music_presets, music,
-        # music_none
-        out += ["", "", [], "", "", "style", "", [], "", True]
+        # music_from, music_role, music_retention, music_presets, music
+        out += ["", "", [], "", "", "style", "", [], ""]
 
         # Re-hide every slot: entries, shots, then beats.
         # Shot 1 stays visible because a prompt always has at least one.

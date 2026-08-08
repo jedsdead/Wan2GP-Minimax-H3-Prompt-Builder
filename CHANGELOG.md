@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-08-07
+
+### Changed
+
+- **Removed the "No non-diegetic music" checkbox.** The section now derives
+  from its own fields: `N/A` when the presets and free text are both empty, and
+  whatever you entered otherwise. The checkbox defaulted to ticked, so filling
+  in the music field without noticing it produced `N/A` anyway.
+
 ## [1.3.0] — 2026-08-07
 
 ### Changed

@@ -44,39 +44,52 @@ only uses `re` and `gradio`.
 
 ## What it writes
 
-Six named sections, with `N/A` in any that doesn't apply:
+**Base modes** — three fields:
+
+```
+integrated_multimodal_description: A film noir scene, set in an office at night, lit by shafts of light through blinds, with a high-contrast black and white grade, shot on Super 35mm film, across a 10-second duration.
+[Shot 1] A medium shot on an 85mm portrait lens frames the detective at his desk. The camera pushes in. A private detective in a rumpled trenchcoat, a middle-aged male with a low, gravelly, measured voice (S1) sits back and says: <d>[English] She walked in like trouble.</d> At 00:05.000, (S1) turns to the window.
+overall_soundscape: The scene carries rain on a tin roof.
+non_diegetic_music: A noir jazz score with muted trumpet and brushed drums.
+```
+
+**Reference mode** — six sections, with `N/A` in any that doesn't apply:
 
 ```
 subject_definitions:
-<Subject 1> (S1) is the fishmonger, heavy apron and forearms wet to the elbow, a middle-aged male with a low, weathered, measured voice, from <Picture 1>.
-<Subject 2> is the covered market hall, iron roof beams and crushed-ice counters, from <Picture 1>.
+<Subject 1> (S1) is a private detective in a rumpled trenchcoat, a middle-aged male with a low, gravelly, measured voice, from <Picture 1>.
 <Audio 1> is the voice-timbre reference for <Subject 1> (S1).
-<Video 1> is the motion and performance reference for <Subject 1> (S1).
 summary:
-[reference generation + audio reference] The target video shows rows of crushed-ice counters, featuring <Subject 1> and <Subject 2>. It runs 10 seconds in a live-action, cinematic style.
+[reference generation + audio reference] The target video shows the detective at his desk, featuring <Subject 1>. It runs 10 seconds in a film noir style.
 retention_analysis:
-<Subject 1> (appears in [Shot 1]): fully_preserved - the apron and wet forearms are retained.
+<Subject 1> (appears in [Shot 1]): fully_preserved - the trenchcoat and hat are retained.
 <Audio 1>: reference - the voice-timbre reference for <Subject 1> (S1).
 detailed_description:
-A live-action, cinematic scene, set in a covered market hall, lit by harsh fluorescent light, shot on Super 35mm film, across a 10-second duration.
-[Shot 1] A wide shot on a 35mm lens frames rows of crushed-ice counters. The camera pushes in, on a steadicam. <Subject 1> (S1) lays fish across the ice. At 00:04.000, <Subject 1> (S1) calls out: <d>[English] First batch of the morning.</d>
+A film noir scene, set in an office at night, lit by shafts of light through blinds, with a high-contrast black and white grade, shot on Super 35mm film, across a 10-second duration.
+[Shot 1] A medium shot on an 85mm portrait lens frames the detective at his desk. <Subject 1> (S1) sits back and says: <d>[English] She walked in like trouble.</d>
 overall_soundscape:
-The scene carries market noise and trolley wheels.
+The scene carries rain on a tin roof.
 non_diegetic_music:
-N/A
+A noir jazz score with muted trumpet and brushed drums.
 ```
 
-Descriptions live in `subject_definitions` and the shot text refers to the
-label, so a subject reads identically in every shot.
+In reference mode descriptions live in `subject_definitions` and the shot text
+refers to the label, so a subject reads identically in every shot.
 
----
+## One switch, two schemas
 
-## One form, no modes
+There's no mode selector. A single **Use reference mode (Ref2VA)** checkbox at
+the top decides which schema the prompt uses and reveals every reference
+control.
 
-There are no modes. Every section is always available and the output always
-uses the six-section shape — a character is a subject whether or not a
-reference asset backs it, so defining one as `<Subject 1>` and referring to the
-label is worth doing even for text-to-video.
+**Off** — the base three-field schema:
+`integrated_multimodal_description`, `overall_soundscape`, `non_diegetic_music`.
+Speakers carry their description inline at first mention and `(S1)` after that.
+
+**On** — the six-section reference schema: `subject_definitions`, `summary`,
+`retention_analysis`, `detailed_description`, `overall_soundscape`,
+`non_diegetic_music`. Entries become `<Subject N>` labels and the shot text
+refers to the label rather than repeating the description.
 
 Keyframe images are attached in the generator, not here, and the model
 associates them with the prompt positionally:
@@ -170,7 +183,8 @@ video** section nested beneath it. Both appear only in reference mode.
 
 ### Summary
 
-Always written, and sits just above the Insert button. **Draft summary from
+A reference-mode section, sitting just above the Insert button and hidden when
+the switch is off — base modes have no summary field. **Draft summary from
 fields** produces a first pass you can edit. The `[task type]` prefix is added
 when the prompt is built, so it won't appear in the box itself.
 
@@ -236,9 +250,11 @@ components at load time.
   about the speaker's lips, which isn't generated yet.
 - There's no way to keep a source video's spoken words while replacing the
   voice.
-- The description field is written as `detailed_description`, the reference
-  schema's name. The base schema calls the equivalent
-  `integrated_multimodal_description`.
+- Interface labels read "Subject 1", "Subject 2" in the cast list and the beat
+  **Who** dropdown whatever the mode. They're row identifiers, not output
+  labels — in base modes the word never reaches the prompt.
+- The voiceover clause the spec requires after `</d>` ("while his lips remain
+  completely closed") can't be emitted; there's no field after the speech.
 
 ---
 

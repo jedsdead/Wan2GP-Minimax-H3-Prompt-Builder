@@ -850,15 +850,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             status = gr.Markdown("")
 
-            summary_text = gr.Textbox(
-                label="Summary",
-                lines=3,
-                placeholder="A fishmonger works the counter of a covered market hall as a schoolboy stops to ask about the fish.",
-            )
-            with gr.Row():
-                draft_summary_btn = gr.Button("Draft summary from fields",
-                                              size="sm")
-            summary_status = gr.Markdown("")
+            with gr.Group(visible=False) as summary_block:
+                gr.Markdown(
+                    "The summary is a reference-mode section. Base modes have "
+                    "no summary field, so it is not written when reference "
+                    "mode is off."
+                )
+                summary_text = gr.Textbox(
+                    label="Summary",
+                    lines=3,
+                    placeholder="A fishmonger works the counter of a covered market hall as a schoolboy stops to ask about the fish.",
+                )
+                with gr.Row():
+                    draft_summary_btn = gr.Button("Draft summary from fields",
+                                                  size="sm")
+                summary_status = gr.Markdown("")
 
             gr.Markdown(
                 "**Read the prompt before you generate.** Fields are stitched "
@@ -905,7 +911,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # ignored by the assembly too, so nothing can leak in.
         ref_blocks = ([ref_task_section]
                       + [e["ref_block"] for e in entries]
-                      + [ambience_ref_block, music_ref_block])
+                      + [ambience_ref_block, music_ref_block,
+                         summary_block])
         ref_mode.change(
             fn=lambda on: [gr.update(visible=bool(on))] * len(ref_blocks),
             inputs=[ref_mode], outputs=ref_blocks,
@@ -918,7 +925,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         all_groups = (
             [e["group"] for e in entries]
             + [e["ref_block"] for e in entries]
-            + [ambience_ref_block, music_ref_block]
+            + [ambience_ref_block, music_ref_block, summary_block]
             + [s["group"] for s in shots]
         )
         for s in shots:
@@ -1220,7 +1227,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         else:
             subject_text = labels[0]
 
-        lead = stamp + subject_text if stamp else subject_text
+        # A beat starts a sentence, so the subject is capitalised unless a
+        # timestamp precedes it. Bracketed IDs like "(S1)" are left alone.
+        if stamp:
+            lead = stamp + (subject_text[0].lower() + subject_text[1:]
+                            if subject_text[:1].isalpha() else subject_text)
+        else:
+            lead = (subject_text[0].upper() + subject_text[1:]
+                    if subject_text[:1].isalpha() else subject_text)
         if action:
             lead += " " + action[0].lower() + action[1:]
 
@@ -1233,7 +1247,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return lead + ("" if lead.endswith(".") else ".")
 
     @classmethod
-    def _shot_text(cls, idx, shot, label_for, lang_for=None):
+    def _shot_text(cls, idx, shot, label_for, lang_for=None,
+                   label_after=None):
         anchor = cls._s(shot["anchor"])
         framing = cls._s(shot["framing"])
         head = f"[Shot {idx + 1}]"
@@ -1273,6 +1288,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             text = cls._beat_text(beat, label_for, lang_for or {})
             if text:
                 body.append(text)
+                # Identity is written once; later mentions use the short form.
+                if label_after:
+                    who = beat["speaker"]
+                    picked = who if isinstance(who, (list, tuple)) else [who]
+                    for pk in picked:
+                        pk = cls._s(pk)
+                        if pk in label_after:
+                            label_for[pk] = label_after[pk]
 
         return head + " " + " ".join(b for b in body if b)
 
@@ -1511,7 +1534,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         active = entries[:entry_count]
         counters = {k: 0 for k in ASSET_KINDS}
         defs, retention = [], []
-        label_for = {}          # "Subject 3" -> "<Subject 3> (S1)"
+        label_for = {}          # first mention
+        label_after = {}        # every mention after that
         lang_for = {}           # "Subject 3" -> "Japanese"
         skipped = 0
         uses_reference_assets = False
@@ -1540,7 +1564,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             speaker = cls._s(e["speaker"])
             def_label = f"{label} ({speaker})" if speaker else label
-            label_for[f"Subject {idx + 1}"] = def_label
+            key = f"Subject {idx + 1}"
+
+            if ref_mode:
+                # Labels are stable: the description lives in
+                # subject_definitions, so every mention is just the label.
+                label_for[key] = def_label
+                label_after[key] = def_label
+            else:
+                # Base modes have no subject_definitions, so identity is
+                # written inline at first appearance and referenced by
+                # speaker ID after that. An entry with no speaker has no ID
+                # to fall back on, so its description repeats.
+                voice = cls._voice_phrase(e)
+                inline = ", ".join(p for p in [desc, voice] if p)
+                if speaker:
+                    label_for[key] = (f"{inline} ({speaker})" if inline
+                                      else f"({speaker})")
+                    label_after[key] = f"({speaker})"
+                else:
+                    label_for[key] = inline
+                    label_after[key] = inline
             lang_for[f"Subject {idx + 1}"] = cls._s(e["lang"]) or "English"
 
             # Reference assets attached to this entry. The label names the
@@ -1590,7 +1634,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                       atmosphere, camera_type, duration,
                                       grading)
 
-        shot_lines = [cls._shot_text(n, s, label_for, lang_for)
+        shot_lines = [cls._shot_text(n, s, label_for, lang_for, label_after)
                       for n, s in enumerate(shots)]
         body = "\n".join(l for l in ([opening] + shot_lines) if l.strip())
 
@@ -1665,6 +1709,22 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # The opening clause already carries the style, so no separate
         # style line here.
         detailed = body
+
+        if not ref_mode:
+            # Base modes use the three core fields. No subject_definitions,
+            # no summary, no retention_analysis - speakers carry their own
+            # identity inline and (S1) is the only label.
+            lines = [f"integrated_multimodal_description: {detailed}",
+                     f"overall_soundscape: {sound_field}",
+                     f"non_diegetic_music: {music_field}"]
+            warnings = []
+            if not any(cls._s(s["anchor"]) for s in shots):
+                warnings.append("no **anchor** on any shot - nothing "
+                                "describes what is in frame")
+            check = "Read it through for grammar before generating."
+            status = (f"Prompt written. {check}" if not warnings
+                      else "Written, but: " + "; ".join(warnings) + f". {check}")
+            return cls._no_blank_lines("\n".join(lines)), status
 
         sections = [
             "subject_definitions:\n" + "\n".join(defs) if defs
@@ -1750,7 +1810,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Shot 1 stays visible because a prompt always has at least one.
         out += [gr.update(visible=False)] * MAX_ENTRIES   # entry groups
         out += [gr.update(visible=False)] * MAX_ENTRIES   # reference blocks
-        out += [gr.update(visible=False)] * 2             # audio ref blocks
+        out += [gr.update(visible=False)] * 3   # audio refs + summary block
         out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
         out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
         return out

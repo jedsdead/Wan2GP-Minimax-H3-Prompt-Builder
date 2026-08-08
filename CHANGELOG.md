@@ -5,6 +5,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-08-07
+
+### Changed
+
+- **Base modes now write the three-field schema.** With reference mode off the
+  output is `integrated_multimodal_description`, `overall_soundscape` and
+  `non_diegetic_music` — no `subject_definitions`, `summary` or
+  `retention_analysis`, matching MiniMax's base guide. Reference mode still
+  writes the six-section format.
+- **Speaker identity is written inline in base modes.** Without
+  `subject_definitions` there is nowhere to define a subject, so a speaker's
+  description appears at their first mention and `(S1)` is used after that.
+  Entries with no speaker have no ID to fall back on, so their description is
+  emitted inline each time — the shot anchor is usually the better home for
+  scenery in base modes.
+- **The summary is a reference-mode section** and hides with the switch. Base
+  modes have no summary field.
+
+### Fixed
+
+- An inline subject starting a sentence wasn't capitalised, giving *"The camera
+  pushes in. a private detective…"*. Bracketed IDs like `(S1)` are left alone.
+
+### Notes
+
+Interface labels still read "Subject 1", "Subject 2" in the cast list and the
+beat **Who** dropdown regardless of mode. These are row identifiers rather than
+output labels — in base modes the word never reaches the prompt.
+
 ## [1.2.1] — 2026-08-07
 
 ### Added

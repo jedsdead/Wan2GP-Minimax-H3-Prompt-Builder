@@ -63,16 +63,67 @@ H3_MODEL_HINTS = ("minimax", "h3")
 # Vocabulary
 # =============================================================================
 
-# Guidance only. Keyframe images are attached in the generator, and the model
-# associates them with the prompt positionally - so there is nothing for the
-# builder to configure, only somewhere to say where each one gets described.
+# Worked example used for the greyed-out placeholder text. Read end to end,
+# the fields below form one coherent prompt: a fishmonger gutting a fish,
+# across two shots of two beats each. Placeholders vanish as soon as you type.
+
+EXAMPLE_ENTRIES = [
+    {
+        "desc": "a fishmonger in his fifties, heavy rubber apron, forearms wet to the elbow",
+        "accent": "a faint West Country accent",   # or just "West Country"
+        "note": "the rubber apron and wet forearms are retained",
+        "shots": "1, 2",
+    },
+    {
+        "desc": "the marble counter of a covered market stall, crushed ice banked along its length",
+        "accent": "",
+        "note": "the marble surface and banked ice are retained",
+        "shots": "1, 2",
+    },
+]
+
+EXAMPLE_ENTRY_FALLBACK = {
+    "desc": "another subject - a person, an animal, a place or a prop",
+    "accent": "any accent worth stating",
+    "note": "which of its features carry over",
+    "shots": "1, 2",
+}
+
+EXAMPLE_SHOTS = [
+    {
+        "anchor": "the fishmonger behind the counter, a whole fish laid on the ice, a steel knife within reach",
+        "beats": [
+            {"action": "lifts the fish onto the board and says",
+             "speech": "This one came off the boat this morning."},
+            {"action": "sets the blade against the belly and steadies the fish",
+             "speech": ""},
+        ],
+    },
+    {
+        "anchor": "his hands and the board, the fish opened along the belly",
+        "beats": [
+            {"action": "draws the knife along the spine in one unbroken movement",
+             "speech": ""},
+            {"action": "glances up and adds",
+             "speech": "Cleanest fish you will get all week."},
+        ],
+    },
+]
+
+EXAMPLE_SHOT_FALLBACK = {
+    "anchor": "what is in frame when this shot opens",
+    "beats": [{"action": "what happens in this beat",
+               "speech": "anything spoken, without quote marks"}],
+}
+
+
+# Keyframe images are attached in the generator; the checkboxes only decide
+# which instruction line the prompt needs.
 KEYFRAME_NOTE = (
-    "Keyframe images are attached in the generator, not here. If you are "
-    "starting from an image, describe it in **Shot 1's anchor**. If you have "
-    "an end image, describe it at the **end of the last shot** - its final "
-    "beat, or its anchor if that shot has no beats. "
-    "Reference labels like `<Picture 1>` resolve to the images loaded above, "
-    "in order."
+    "Tick these to match the keyframe images attached in the generator - they "
+    "write the instruction line the model expects. Referring to "
+    "`<Picture 1>` inside your own descriptions is up to you; the guide's "
+    "examples do it in the shot text as well."
 )
 
 STYLES = [
@@ -455,6 +506,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # The sample plugin uses this id as the model selector, so it should
         # exist. Requested here so it is populated as self.model_choice_target
         # before create_ui runs; the wiring degrades gracefully if not.
+        # state carries "model_type"; the two trigger components are what
+        # actually fire when the model changes. The visible model dropdown is
+        # created after WanGP snapshots its locals, so it is not requestable.
+        self.request_component("state")
+        self.request_component("refresh_form_trigger")
         self.request_component("model_choice_target")
         self.insert_after("prompt", self.create_ui)
 
@@ -500,6 +556,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             gr.Markdown(KEYFRAME_NOTE)
 
+            with gr.Row():
+                start_image = gr.Checkbox(label="Start image", value=False)
+                end_image = gr.Checkbox(label="End image", value=False)
+
             ref_mode = gr.Checkbox(
                 label="Use reference mode (Ref2VA)",
                 value=False,
@@ -508,7 +568,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             )
 
             with gr.Row():
-                duration = gr.Number(label="Duration (seconds)", value=8.0,
+                duration = gr.Number(label="Duration of this window (seconds)",
+                                     value=8.0,
                                      minimum=0.5, step=0.5)
                 style = dd(STYLES, "Style")
                 grading = dd(GRADING, "Colour grade")
@@ -538,11 +599,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 entry_count = gr.State(0)
 
                 for i in range(MAX_ENTRIES):
+                    ex = (EXAMPLE_ENTRIES[i] if i < len(EXAMPLE_ENTRIES)
+                          else EXAMPLE_ENTRY_FALLBACK)
                     with gr.Group(visible=False) as grp:
                         gr.Markdown(f"**Subject {i + 1}**")
                         e_desc = gr.Textbox(
                             label="Description",
-                            placeholder="the fishmonger, heavy apron, forearms wet to the elbow",
+                            placeholder=ex["desc"],
                         )
                         with gr.Row():
                             e_kind = gr.Dropdown(ASSET_KINDS, label="Label",
@@ -563,7 +626,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         with gr.Row():
                             e_timbre = dd(VOICE_TIMBRE, "Timbre")
                             e_rate = dd(VOICE_RATE, "Rate")
-                            e_accent = gr.Textbox(label="Accent (optional)")
+                            e_accent = gr.Textbox(label="Accent (optional)",
+                                                  placeholder=ex["accent"])
                         with gr.Row():
                             e_lang = gr.Dropdown(
                                 LANGUAGES, label="Language", value="English",
@@ -586,10 +650,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             with gr.Row():
                                 e_note = gr.Textbox(
                                     label="What is retained",
-                                    placeholder="the apron and wet forearms are retained",
+                                    placeholder=ex["note"],
                                 )
                                 e_shots = gr.Textbox(label="Appears in shots",
-                                                     placeholder="1, 2")
+                                                     placeholder=ex["shots"])
                             with gr.Row():
                                 e_voice_from = gr.Dropdown(
                                     REF_AUDIO_SLOTS, label="Voice from",
@@ -650,7 +714,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     )
                     video_desc = gr.Textbox(
                         label="What the video contributes",
-                        placeholder="handheld camera movement and cutting rhythm",
+                        placeholder="the original camera movement and the pace of the cuts",
                     )
                     video_retention = locked_dd(VISUAL_RETENTION,
                                                 "Retention (picture)")
@@ -670,7 +734,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                                 "Retention (audio)")
                         video_audio_desc = gr.Textbox(
                             label="What the audio contributes",
-                            placeholder="the original spoken dialogue",
+                            placeholder="the original market ambience and the fishmonger's dialogue",
                         )
 
 
@@ -684,6 +748,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 )
 
                 for si in range(MAX_SHOTS):
+                    shot_ex = (EXAMPLE_SHOTS[si] if si < len(EXAMPLE_SHOTS)
+                               else EXAMPLE_SHOT_FALLBACK)
                     with gr.Group(visible=(si == 0)) as sgrp:
                         gr.Markdown(f"**Shot {si + 1}**")
                         with gr.Row():
@@ -709,12 +775,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             sh_rig = dd(RIGS, "Rig")
                         sh_anchor = gr.Textbox(
                             label="Anchor - composition and what is in frame",
-                            placeholder="a fishmonger behind a crushed-ice counter in a covered market hall",
+                            placeholder=shot_ex["anchor"],
                         )
 
                         beats = []
                         beat_count = gr.State(0)
                         for bi in range(MAX_BEATS):
+                            beat_ex = (shot_ex["beats"][bi]
+                                       if bi < len(shot_ex["beats"])
+                                       else EXAMPLE_SHOT_FALLBACK["beats"][0])
                             with gr.Group(visible=False) as bgrp:
                                 with gr.Row():
                                     b_type = gr.Dropdown(
@@ -738,10 +807,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                     )
                                 b_action = gr.Textbox(
                                     label="Action / delivery (outside <d>)",
-                                    placeholder="turns her head and says",
+                                    placeholder=beat_ex["action"],
                                 )
                                 b_speech = gr.Textbox(
                                     label="Spoken words (inside <d>) - leave blank for non-verbal",
+                                    placeholder=beat_ex["speech"],
                                 )
                                 with gr.Row():
                                     b_at = gr.Number(
@@ -808,7 +878,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 soundscape = gr.Textbox(
                     label="Soundscape - custom / additional information",
                     lines=2,
-                    placeholder="A wide market-hall echo carries trolley wheels and distant haggling.",
+                    placeholder="Ice shifts under the fish and the blade taps the board. Market chatter carries from further down the hall.",
                 )
                 # Reference fields sit under their own field and follow the
                 # Ref2VA switch, like every other reference control.
@@ -832,6 +902,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 music = gr.Textbox(
                     label="Non-diegetic music - custom / additional information",
                     lines=2,
+                    placeholder="A slow upright bass with brushed drums, thinning out as the second shot begins.",
                 )
                 with gr.Group(visible=False) as music_ref_block:
                     with gr.Row():
@@ -857,7 +928,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 summary_text = gr.Textbox(
                     label="Summary",
                     lines=3,
-                    placeholder="A fishmonger works the counter of a covered market hall as a schoolboy stops to ask about the fish.",
+                    placeholder="The target video shows a fishmonger preparing and gutting a whole fish at his market counter, featuring <Subject 1> and <Subject 2>. It runs 10 seconds in a live-action, documentary style.",
                 )
                 with gr.Row():
                     draft_summary_btn = gr.Button("Draft summary from fields",
@@ -875,11 +946,25 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             with gr.Row():
                 insert_btn = gr.Button("Insert into prompt", variant="primary")
+                append_btn = gr.Button("Insert as sliding window")
+            with gr.Row():
+                clear_shots_btn = gr.Button("Clear shots and beats")
                 clear_btn = gr.Button("Clear all fields")
+
+            gr.Markdown(
+                "**Insert into prompt** replaces the prompt box. **Insert as "
+                "sliding window** appends this prompt below what is already "
+                "there, separated by a blank line - build one window, insert "
+                "it, then write the next. For that to work, set *How to "
+                "Process each Line of the Text Prompt* to the paragraph-per-"
+                "sliding-window option; on the default queue setting each "
+                "window becomes a separate job."
+            )
 
         # ---- wiring -------------------------------------------------------
 
-        flat = [ref_mode, duration, style, grading, location, lighting, atmosphere,
+        flat = [start_image, end_image,
+                ref_mode, duration, style, grading, location, lighting, atmosphere,
                 camera_type,
                 video_role, video_desc, video_retention,
                 video_audio, video_audio_desc, entry_count]
@@ -904,6 +989,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         insert_btn.click(fn=self._build, inputs=flat,
                          outputs=[self.prompt, status])
+
+        append_btn.click(fn=self._append_window,
+                         inputs=[self.prompt] + flat,
+                         outputs=[self.prompt, status])
+
+        # Shots and beats only - cast, scene, audio and summary usually carry
+        # over between windows, the action does not.
+        shot_fields = []
+        for s in shots:
+            shot_fields += [s["cut"], s["cutverb"], s["framing"], s["lens"],
+                            s["motion"], s["ampl"], s["speed"], s["rig"],
+                            s["anchor"], s["beat_count"]]
+            for b in s["beats"]:
+                shot_fields += [b["type"], b["speaker"], b["lang"],
+                                b["action"], b["speech"], b["at"], b["carries"]]
+        shot_groups = [s["group"] for s in shots]
+        for s in shots:
+            shot_groups += [b["group"] for b in s["beats"]]
+
+        clear_shots_btn.click(fn=self._clear_shots, inputs=[],
+                              outputs=shot_fields + shot_groups)
 
         # One switch for everything Ref2VA. Values in a hidden block are
         # ignored by the assembly too, so nothing can leak in.
@@ -935,30 +1041,44 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     def _wire_model_visibility(self, root, warning):
         """
-        Try to hide the builder when a non-H3 model is selected.
+        Hide the builder unless a MiniMax H3 model is selected.
 
-        on_model_change cannot do this: PluginManager's dispatcher discards
-        the return value, so it can only record state. Binding our own
-        handler to the model selector works, but the component id is a guess
-        and varies between WanGP versions - so a failure here degrades to
-        an always-visible builder rather than breaking the plugin.
+        Two things make this awkward. on_model_change() is notification-only,
+        because PluginManager's dispatcher discards whatever it returns. And
+        the visible model dropdown is created after WanGP snapshots its
+        locals for the plugin component registry, so it cannot be requested.
+
+        What is available is `state`, whose "model_type" is set immediately
+        before the model-change notification, plus two hidden trigger
+        components that fire when the form refreshes or a model switch is
+        requested. Binding to both and reading the model out of state covers
+        either path. A failure here leaves the builder visible rather than
+        breaking the plugin.
         """
-        try:
-            selector = getattr(self, "model_choice_target", None)
-            if selector is None:
-                print("[MiniMaxH3PromptBuilder] no model selector found; "
-                      "the builder will stay visible for every model.")
-                return
+        state = getattr(self, "state", None)
+        triggers = [t for t in (getattr(self, "refresh_form_trigger", None),
+                                getattr(self, "model_choice_target", None))
+                    if t is not None]
 
-            def _toggle(model_type):
-                m = str(model_type or "").lower()
-                is_h3 = any(h in m for h in H3_MODEL_HINTS)
-                return gr.update(visible=is_h3), gr.update(visible=False)
+        if state is None or not triggers:
+            print("[H3PromptBuilder] could not wire model visibility; "
+                  "the builder will stay visible for every model.")
+            return
 
-            selector.change(fn=_toggle, inputs=[selector],
-                            outputs=[root, warning])
-        except Exception as exc:
-            print(f"[H3PromptBuilder] model visibility not wired: {exc}")
+        def _toggle(st):
+            model_type = ""
+            if isinstance(st, dict):
+                model_type = str(st.get("model_type", "") or "")
+            model_type = model_type or self.current_model_type
+            is_h3 = any(h in model_type.lower() for h in H3_MODEL_HINTS)
+            return gr.update(visible=is_h3), gr.update(visible=False)
+
+        for trigger in triggers:
+            try:
+                trigger.change(fn=_toggle, inputs=[state],
+                               outputs=[root, warning])
+            except Exception as exc:
+                print(f"[H3PromptBuilder] visibility trigger not wired: {exc}")
 
     # =====================================================================
     # Assembly
@@ -1129,6 +1249,38 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return f"{minutes:02d}:{rest:06.3f}"
 
     @classmethod
+    def _instruction(cls, start_image, end_image, duration, shot_count):
+        """
+        The keyframe instruction line, reproduced verbatim from the guide.
+
+        Note the guide's own inconsistency: the start-and-end form uses plain
+        "Picture 1" and "Shot 1", while the other two use <Picture 1> and
+        [Shot 1]. That is copied as written rather than tidied, since this is
+        boilerplate the model was trained on. N is the actual final shot and
+        S.SS is the duration to exactly two decimal places.
+        """
+        try:
+            secs = f"{float(duration):.2f}"
+        except (TypeError, ValueError):
+            secs = "0.00"
+        last = max(1, int(shot_count or 1))
+
+        if start_image and end_image:
+            return ("How the reference pictures align with the target video "
+                    "\u2014 Picture 1 (from Shot 1) aligns with the 0.00-second "
+                    "mark of the target video; Picture 2 (from Shot "
+                    f"{last}) aligns with the {secs}-second mark of the "
+                    "target video.")
+        if start_image:
+            return ("For the target video, at 0.00 seconds into the target "
+                    "video, <Picture 1> (from [Shot 1]) is fully referenced.")
+        if end_image:
+            return ("How the reference pictures align with the target video "
+                    f"\u2014 <Picture 1> (from [Shot {last}]) aligns with the "
+                    f"{secs}-second mark of the target video.")
+        return ""
+
+    @classmethod
     def _voice_phrase(cls, e):
         """
         Voice description for an entry that speaks. Written into its subject
@@ -1147,8 +1299,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             parts.append("with a " + ", ".join(bits) + " voice")
         accent = cls._s(e.get("accent"))
         if accent:
-            parts.append(f"with {accent} accent" if not bits
-                         else f"and {accent} accent")
+            # People write this field several ways: bare ("West Country"),
+            # with the word ("a West Country accent"), or with a synonym
+            # ("a soft Irish lilt"). Only add "accent" when nothing already
+            # names the kind of thing it is.
+            markers = ("accent", "lilt", "brogue", "drawl", "twang", "burr",
+                       "inflection", "cadence", "dialect", "intonation")
+            low = accent.lower()
+            phrase = accent if any(mk in low for mk in markers) else f"{accent} accent"
+            parts.append(f"with {phrase}" if not bits else f"and {phrase}")
         presence = cls._s(e.get("onscreen"))
         if presence == "off-screen":
             parts.append("heard off-screen")
@@ -1314,6 +1473,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             i += n
             return out[0] if n == 1 else out
 
+        start_image = bool(take())
+        end_image = bool(take())
         ref_mode = bool(take())
         duration = take()
         style = cls._s(take())
@@ -1372,6 +1533,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music = cls._s(take())
 
         return dict(
+            start_image=start_image, end_image=end_image,
             ref_mode=ref_mode, duration=duration, style=style,
             grading=grading, location=location,
             lighting=lighting, atmosphere=atmosphere, camera_type=camera_type,
@@ -1387,6 +1549,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             music_retention=music_retention,
             music_presets=music_presets, music=music,
         )
+
+    @classmethod
+    def _append_window(cls, existing, *values):
+        """
+        Append this prompt below whatever is already in the box, separated by
+        one blank line. That blank line is the window separator when the
+        prompt-processing mode is set to paragraph-per-sliding-window, and
+        each assembled prompt has no blank lines of its own, so the boundary
+        is unambiguous.
+        """
+        built, status = cls._build(*values)
+        if not built.strip():
+            return existing, "Nothing to append yet."
+
+        existing = (existing or "").rstrip()
+        if not existing:
+            return built, status.replace("Prompt written.",
+                                         "First window written.")
+        combined = existing + "\n\n" + built
+        windows = combined.count("\n\n") + 1
+        return combined, f"Appended as window {windows}. " + status.split(". ", 1)[-1]
 
     @classmethod
     def _draft_summary(cls, *values):
@@ -1500,6 +1683,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
     @classmethod
     def _build(cls, *values):
         d = cls._unpack(values)
+        start_image = d["start_image"]; end_image = d["end_image"]
         ref_mode = d["ref_mode"]; duration = d["duration"]
         style = d["style"]; grading = d["grading"]
         location = d["location"]; lighting = d["lighting"]
@@ -1706,9 +1890,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # Base modes use the three core fields. No subject_definitions,
             # no summary, no retention_analysis - speakers carry their own
             # identity inline and (S1) is the only label.
-            lines = [f"integrated_multimodal_description: {detailed}",
-                     f"overall_soundscape: {sound_field}",
-                     f"non_diegetic_music: {music_field}"]
+            lines = []
+            instruction = cls._instruction(start_image, end_image, duration,
+                                           len(shots))
+            if instruction:
+                lines.append(instruction)
+            lines += [f"integrated_multimodal_description: {detailed}",
+                      f"overall_soundscape: {sound_field}",
+                      f"non_diegetic_music: {music_field}"]
             warnings = []
             if not any(cls._s(s["anchor"]) for s in shots):
                 warnings.append("no **anchor** on any shot - nothing "
@@ -1718,7 +1907,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                       else "Written, but: " + "; ".join(warnings) + f". {check}")
             return cls._no_blank_lines("\n".join(lines)), status
 
-        sections = [
+        sections = []
+        instruction = cls._instruction(start_image, end_image, duration,
+                                       len(shots))
+        if instruction:
+            sections.append(instruction)
+
+        sections += [
             "subject_definitions:\n" + "\n".join(defs) if defs
             else "subject_definitions:\nN/A",
             "summary:\n" + summary if summary else "summary:\nN/A",
@@ -1771,11 +1966,24 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return cls._no_blank_lines("\n".join(sections)), status
 
     @staticmethod
+    def _clear_shots():
+        """Reset the shots and beats, leaving everything else alone - cast,
+        scene, audio and summary usually carry over between windows."""
+        out = []
+        for si in range(MAX_SHOTS):
+            out += ["opening" if si == 0 else None, "-" if si == 0 else "",
+                    "", "", "", "", "", "", "", 0]
+            out += ["action", [], "", "", "", None, False] * MAX_BEATS
+        out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
+        out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
+        return out
+
+    @staticmethod
     def _clear():
         # mode, duration, style, location, lighting, atmosphere,
         # camera_type, video_role, video_desc, video_retention,
         # video_audio, video_audio_desc
-        out = [False, 8.0, "", "", "", "", "", "", "none", "", "", "", ""]
+        out = [False, False, False, 8.0, "", "", "", "", "", "", "none", "", "", "", ""]
         out.append(0)                                 # entry_count
         for _ in range(MAX_ENTRIES):
             # kind, desc, speaker, presence, age, gender, pitch, timbre,

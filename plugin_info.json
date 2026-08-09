@@ -1,10 +1,10 @@
 {
     "name": "MiniMax H3 Prompt Builder",
-    "version": "1.3.1",
-    "description": "Builds MiniMax H3 prompts. Base modes write the three-field schema with integrated_multimodal_description; a reference-mode switch reveals all Ref2VA options and writes the six-section format. Combined cast and subjects list, ordered beats with intra-shot timing, per-shot lens and rig, colour grading, and audio references for voice, ambience and score.",
+    "version": "1.4.1",
+    "description": "Builds MiniMax H3 prompts. Base modes write the three-field schema, a reference-mode switch writes the six-section Ref2VA format, and start/end image checkboxes add the keyframe instruction line. Sliding-window support, combined cast and subjects list, ordered beats with intra-shot timing, per-shot lens and rig, and audio references for voice, ambience and score.",
     "author": "JedsDeadBaby",
-    "date": "2026-08-07",
+    "date": "2026-08-08",
     "type": "extension",
     "url": "https://github.com/JedsDeadBaby/wan2gp-h3-prompt-builder",
-    "wan2gp_version": "12.42"
+    "wan2gp_version": "12.44"
 }

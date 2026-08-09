@@ -91,17 +91,38 @@ Speakers carry their description inline at first mention and `(S1)` after that.
 `non_diegetic_music`. Entries become `<Subject N>` labels and the shot text
 refers to the label rather than repeating the description.
 
-Keyframe images are attached in the generator, not here, and the model
-associates them with the prompt positionally:
+Keyframe images are attached in the generator; **Start image** and **End
+image** checkboxes at the top tell the builder which instruction line to write:
 
-- **Start image** — describe it in **Shot 1's anchor**
-- **End image** — describe it at the **end of the last shot**: its final
-  beat, or its anchor if that shot has no beats
-- **Reference images** — `<Picture 1>`, `<Picture 2>` resolve to the images
-  loaded above, in order
+| Ticked | Instruction line |
+|---|---|
+| Start | `<Picture 1>` is fully referenced at 0.00 seconds |
+| End | `<Picture 1>` aligns with the S.SS-second mark of the final shot |
+| Both | `Picture 1` at 0.00 seconds, `Picture 2` at the S.SS-second mark |
+
+The shot index tracks your actual final shot, and the duration is formatted to
+two decimals. Referring to `<Picture 1>` inside your own descriptions is up to
+you — the guide's examples do it in the shot text as well.
 
 With both a start and an end image, a single shot usually works best so the
 model can interpolate between them.
+
+## Sliding windows
+
+**Insert into prompt** replaces the prompt box. **Insert as sliding window**
+appends the built prompt below what's already there, separated by a blank line
+— so you build one window, insert it, then write the next and append that.
+Since each assembled prompt has no blank lines of its own, the separator is
+unambiguous.
+
+Two things to know. **Duration** is the length of *that window*, since
+sliding-window timing restarts at zero for each one. And WanGP's *How to
+Process each Line of the Text Prompt* setting must be on the
+paragraph-per-sliding-window option — on the default queue setting each window
+becomes a separate job instead.
+
+**Clear shots and beats** resets only the action, leaving cast, scene, audio
+and summary in place for the next window.
 
 ---
 
@@ -209,6 +230,11 @@ templates, so wording you enter may not agree grammatically with the phrasing
 around it — *"the target video shows a woman faces the door"* rather than
 *facing*. The prompt box is editable.
 
+**The placeholders are a worked example.** Every text field's greyed-out text
+belongs to one coherent prompt — a fishmonger gutting a fish across two shots.
+Read them in order to see the expected phrasing and structure; they vanish as
+soon as you type.
+
 ---
 
 ## Reference slots
@@ -243,8 +269,8 @@ components at load time.
   sequence.
 - Beat timestamps aren't validated against the clip duration or against each
   other.
-- The panel hides on model change only — loading WanGP with another model
-  already selected leaves it visible until you switch.
+- The panel hides on model change. If WanGP starts with a non-MiniMax model
+  already selected, it may stay visible until you switch models once.
 - Slot numbers aren't checked against what's actually loaded in the generator.
 - Voiceover has required phrasing in the spec, including a follow-up clause
   about the speaker's lips, which isn't generated yet.

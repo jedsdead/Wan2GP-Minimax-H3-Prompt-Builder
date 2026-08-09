@@ -5,6 +5,81 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-08-08
+
+### Fixed
+
+- **The panel appeared for every model.** The visibility wiring was bound to a
+  component that could never work: WanGP's visible model dropdown is created
+  *after* it snapshots its locals for the plugin component registry, so it was
+  never requestable and the handler silently never attached. It now binds to
+  the two hidden trigger components that do fire on a model change, and reads
+  `model_type` out of `state`.
+
+### Notes
+
+Frame injection was investigated and is out of scope. It's a generation
+parameter — a `frames_positions` field of frame numbers, or `L` for the end of
+the current sliding-window segment — that injects from the reference images.
+Nothing about it touches the prompt text.
+
+## [1.4.0] — 2026-08-08
+
+### Added
+
+- **Start image / End image checkboxes**, beside the reference-mode switch.
+  They write the keyframe instruction line the guide requires, reproduced
+  verbatim — including its own inconsistency, where the start-and-end form
+  uses plain `Picture 1` and `Shot 1` while the other two use `<Picture 1>`
+  and `[Shot 1]`. The shot index tracks your actual final shot and the
+  duration is formatted to two decimal places. End-only correctly uses
+  `<Picture 1>`, not Picture 2.
+- **Insert as sliding window.** Appends the built prompt below whatever is
+  already in the prompt box, separated by a blank line — build one window,
+  insert it, write the next. Since each assembled prompt has no blank lines of
+  its own, the separator is unambiguous.
+- **Clear shots and beats**, leaving cast, scene, audio and summary intact,
+  since those usually carry over between windows while the action does not.
+
+### Changed
+
+- **Duration** is labelled as the duration of *this window*, because
+  sliding-window timing restarts at zero for each window.
+- The keyframe note no longer explains where to describe start and end images,
+  since the instruction line now states their alignment. It says instead that
+  referring to `<Picture 1>` inside your own descriptions is up to you.
+- `wan2gp_version` corrected to 12.44.
+
+### Notes
+
+**Insert as sliding window** needs *How to Process each Line of the Text
+Prompt* set to the paragraph-per-sliding-window option. On the default queue
+setting each window becomes a separate job instead.
+
+## [1.3.2] — 2026-08-08
+
+### Added
+
+- **Worked example in every text field.** The greyed-out placeholders now form
+  one coherent prompt end to end — a fishmonger gutting a fish, across two
+  subjects, two shots and two beats each, with one spoken and one silent beat
+  per shot. Copying them through produces a valid prompt, which makes the
+  expected grammar and structure readable without leaving the panel. Slots
+  beyond the example get generic hints.
+
+### Fixed
+
+- The **accent** field appended the word "accent" unconditionally, so "a faint
+  West Country accent" came out doubled. It now recognises the word and common
+  synonyms — lilt, brogue, drawl, twang, burr, inflection, cadence, dialect —
+  and leaves those alone, while a bare "West Country" still gets it added.
+
+### Notes
+
+Dropdowns can't show placeholder text, so style, location, lighting, grading,
+camera and rig aren't covered by the example. It assumes a documentary style in
+a covered market hall under harsh fluorescent light, shot on Super 35mm.
+
 ## [1.3.1] — 2026-08-07
 
 ### Changed

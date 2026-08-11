@@ -266,6 +266,57 @@ VOICE_RATE = [
     "clipped", "halting", "breathless", "drawling", "steady", "urgent",
 ]
 
+# Character creator ---------------------------------------------------------
+# Physical description only - voice already has its own fields above. All
+# typeable; entries left blank are simply omitted from the composed sentence.
+
+CHAR_ETHNICITIES = [
+    "", "Asian", "East Asian", "South Asian", "Southeast Asian",
+    "Black", "African", "White", "Caucasian", "Hispanic", "Latino", "Latina",
+    "Middle Eastern", "North African", "Native American", "Indigenous",
+    "Pacific Islander", "Mixed ethnicity",
+]
+
+CHAR_GENDERS = ["", "male", "female", "non-binary", "androgynous"]
+
+CHAR_AGE_RANGES = [
+    "", "childhood", "the early teens", "the late teens", "early 20s",
+    "mid-20s", "late 20s", "early 30s", "mid-30s", "late 30s", "early 40s",
+    "mid-40s", "late 40s", "early 50s", "mid-50s", "late 50s", "the 60s",
+    "the 70s", "the 80s", "old age",
+]
+
+CHAR_HEIGHTS = [
+    "", "under five feet", "five foot two", "five foot four",
+    "five foot six", "five foot eight", "five foot ten", "six feet",
+    "six foot two", "six foot four", "over six feet", "average height",
+    "tall", "short", "petite", "statuesque",
+]
+
+CHAR_BUILDS = [
+    "", "slender", "athletic", "toned", "muscular", "stocky", "heavyset",
+    "broad-shouldered", "wiry", "curvy", "average build", "petite build",
+]
+
+CHAR_HAIRSTYLES = [
+    "", "long straight", "long wavy", "long curly", "shoulder-length",
+    "short cropped", "buzz cut", "shaved head", "bald", "braided",
+    "dreadlocked", "afro", "slicked-back", "messy tousled", "receding",
+    "ponytailed", "pixie cut", "bob cut",
+]
+
+CHAR_HAIR_COLORS = [
+    "", "black", "dark brown", "light brown", "blonde", "platinum blonde",
+    "auburn", "red", "ginger", "grey", "white", "silver", "salt-and-pepper",
+    "dyed vibrant",
+]
+
+CHAR_EYE_COLORS = [
+    "", "brown", "dark brown", "blue", "light blue", "green", "hazel",
+    "grey", "amber", "black",
+]
+
+
 # Reference mode -----------------------------------------------------------
 
 ASSET_KINDS = ["Subject", "Picture", "Video", "Audio"]
@@ -533,7 +584,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         below: insert_after does parent.children.pop(-1) and assumes the
         constructor added exactly one top-level child.
         """
-        entries, shots = [], []
+        entries, shots, char_names = [], [], []
 
         def dd(choices, label, **kw):
             return gr.Dropdown(choices, label=label, value="",
@@ -603,9 +654,43 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                           else EXAMPLE_ENTRY_FALLBACK)
                     with gr.Group(visible=False) as grp:
                         gr.Markdown(f"**Subject {i + 1}**")
+                        e_use_creator = gr.Checkbox(
+                            label="Use character creator", value=False,
+                        )
+                        with gr.Group(visible=False) as e_creator_block:
+                            e_char_name = gr.Textbox(
+                                label="Name (optional)",
+                                placeholder="John",
+                            )
+                            with gr.Row():
+                                e_char_ethnicity = dd(CHAR_ETHNICITIES, "Ethnicity")
+                                e_char_gender = dd(CHAR_GENDERS, "Gender")
+                                e_char_age = dd(CHAR_AGE_RANGES, "Age range")
+                            with gr.Row():
+                                e_char_height = dd(CHAR_HEIGHTS, "Height")
+                                e_char_build = dd(CHAR_BUILDS, "Build")
+                            with gr.Row():
+                                e_char_hairstyle = dd(CHAR_HAIRSTYLES, "Hairstyle")
+                                e_char_haircolor = dd(CHAR_HAIR_COLORS, "Hair colour")
+                                e_char_eyecolor = dd(CHAR_EYE_COLORS, "Eye colour")
+                            e_add_to_desc = gr.Button(
+                                "Add to description", size="sm",
+                            )
+                        e_use_creator.change(
+                            fn=lambda t: gr.update(visible=bool(t)),
+                            inputs=[e_use_creator], outputs=[e_creator_block],
+                        )
                         e_desc = gr.Textbox(
                             label="Description",
                             placeholder=ex["desc"],
+                        )
+                        e_add_to_desc.click(
+                            fn=self._character_description,
+                            inputs=[e_char_name, e_char_ethnicity, e_char_gender,
+                                    e_char_age, e_char_height, e_char_build,
+                                    e_char_hairstyle, e_char_haircolor,
+                                    e_char_eyecolor],
+                            outputs=[e_desc],
                         )
                         with gr.Row():
                             e_kind = gr.Dropdown(ASSET_KINDS, label="Label",
@@ -668,9 +753,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                          "subject's movement or performance",
                                 )
 
+                    char_names.append(e_char_name)
                     entries.append({
                         "group": grp, "kind": e_kind, "desc": e_desc,
                         "speaker": e_speaker, "onscreen": e_onscreen,
+                        "use_creator": e_use_creator,
+                        "creator_block": e_creator_block,
+                        "char_name": e_char_name,
+                        "char_ethnicity": e_char_ethnicity,
+                        "char_gender": e_char_gender,
+                        "char_age": e_char_age,
+                        "char_height": e_char_height,
+                        "char_build": e_char_build,
+                        "char_hairstyle": e_char_hairstyle,
+                        "char_haircolor": e_char_haircolor,
+                        "char_eyecolor": e_char_eyecolor,
                         "age": e_age, "gender": e_gender, "pitch": e_pitch,
                         "timbre": e_timbre, "rate": e_rate, "accent": e_accent,
                         "lang": e_lang,
@@ -793,11 +890,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                              "dialogue when it has spoken words",
                                     )
                                     b_speaker = gr.Dropdown(
-                                        [f"Subject {n + 1}" for n in range(MAX_ENTRIES)],
+                                        [(f"Subject {n + 1}", f"Subject {n + 1}")
+                                         for n in range(MAX_ENTRIES)],
                                         label="Who", value=[],
                                         multiselect=True,
                                         info="Speaker IDs are added "
-                                             "automatically where they apply",
+                                             "automatically where they apply. "
+                                             "Names shown here are just a "
+                                             "memory aid - the prompt still "
+                                             "uses Subject N / (Sx).",
                                     )
                                     b_lang = gr.Dropdown(
                                         [""] + LANGUAGES,
@@ -1036,6 +1137,45 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             all_groups += [b["group"] for b in s["beats"]]
 
         clear_btn.click(fn=self._clear, inputs=[], outputs=flat + all_groups)
+
+        # Character-creator fields aren't part of _build/_clear's flat list
+        # at all - they only ever feed the per-entry "Add to description"
+        # button, so they need their own reset here.
+        char_fields, char_blocks = [], []
+        for e in entries:
+            char_fields += [e["use_creator"], e["char_name"],
+                            e["char_ethnicity"], e["char_gender"],
+                            e["char_age"], e["char_height"], e["char_build"],
+                            e["char_hairstyle"], e["char_haircolor"],
+                            e["char_eyecolor"]]
+            char_blocks.append(e["creator_block"])
+
+        def _reset_char_fields():
+            per_entry = [False, "", "", "", "", "", "", "", "", ""]
+            return per_entry * len(entries) + [gr.update(visible=False)] * len(char_blocks)
+
+        clear_btn.click(fn=_reset_char_fields, inputs=[],
+                        outputs=char_fields + char_blocks)
+
+        # Show each entry's name next to its Subject number in every beat's
+        # Who dropdown, purely as a memory aid when juggling several
+        # subjects - the stored value stays "Subject N" and the final
+        # prompt is unaffected.
+        all_who_dropdowns = [b["speaker"] for s in shots for b in s["beats"]]
+        if char_names and all_who_dropdowns:
+            def _sync_who_labels(*names):
+                choices = []
+                for n in range(MAX_ENTRIES):
+                    nm = (names[n] or "").strip() if n < len(names) else ""
+                    label = f"Subject {n + 1} ({nm})" if nm else f"Subject {n + 1}"
+                    choices.append((label, f"Subject {n + 1}"))
+                return [gr.update(choices=choices)] * len(all_who_dropdowns)
+
+            for name_field in char_names:
+                name_field.change(
+                    fn=_sync_who_labels, inputs=char_names,
+                    outputs=all_who_dropdowns,
+                )
 
         self._wire_model_visibility(root, model_warning)
 
@@ -1279,6 +1419,116 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     f"\u2014 <Picture 1> (from [Shot {last}]) aligns with the "
                     f"{secs}-second mark of the target video.")
         return ""
+
+    @staticmethod
+    def _article(phrase):
+        """'an' or 'a' based on the phrase's first letter sound."""
+        phrase = (phrase or "").strip()
+        return "an" if phrase and phrase[0].lower() in "aeiou" else "a"
+
+    @staticmethod
+    def _oxford_join(items):
+        """'A' / 'A and B' / 'A, B and C' - no serial comma, matching the
+        style used elsewhere in the assembled prompt."""
+        items = [i for i in items if i]
+        if not items:
+            return ""
+        if len(items) == 1:
+            return items[0]
+        return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+    @classmethod
+    def _character_description(cls, name, ethnicity, gender, age_range,
+                               height, build, hairstyle, haircolor, eyecolor):
+        """
+        Compose a physical-description sentence from the character-creator
+        fields. Every part is optional and the grammar adjusts to whatever is
+        filled in - dropping a field removes it cleanly rather than leaving a
+        gap or a stray comma.
+        """
+        name = cls._s(name)
+        ethnicity = cls._s(ethnicity)
+        gender = cls._s(gender)
+        age_range = cls._s(age_range)
+        height = cls._s(height)
+        build = cls._s(build)
+        hairstyle = cls._s(hairstyle)
+        haircolor = cls._s(haircolor)
+        eyecolor = cls._s(eyecolor)
+
+        # "male"/"female" already work as bare nouns ("a male"). Anything
+        # else in the gender field - non-binary, androgynous - is really an
+        # adjective and needs "person" to attach to.
+        if gender.lower() in ("male", "female"):
+            noun = gender
+        elif gender:
+            noun = f"{gender} person"
+        else:
+            noun = "person"
+        core = f"{ethnicity} {noun}" if ethnicity else noun
+        core_phrase = f"{cls._article(core)} {core}"
+
+        # Age, with a pronoun derived from gender rather than typed by hand.
+        if age_range:
+            low = gender.lower()
+            pronoun = "his" if low == "male" else "her" if low == "female" else "their"
+            head = f"{core_phrase} in {pronoun} {age_range}"
+        else:
+            head = core_phrase
+
+        # Hair. "bald"/"shaved head" become noun phrases ("a bald head") so
+        # they sit in the list alongside "a muscular build" and "brown eyes"
+        # as parallel items, rather than reading as a stray adjective.
+        hair_phrase = ""
+        if hairstyle or haircolor:
+            low_style = hairstyle.lower()
+            if low_style == "bald":
+                hair_phrase = "a bald head"
+            elif low_style == "shaved head":
+                hair_phrase = "a shaved head"
+            else:
+                bits = [b for b in [hairstyle, haircolor] if b]
+                if bits:
+                    hair_phrase = " ".join(bits) + " hair"
+
+        # Physical attributes as one list, each a bare noun phrase. "with" is
+        # added once, in front of the whole list, so it is correct whichever
+        # subset is present - build alone, eyes alone, or all three.
+        attr_items = []
+        if build:
+            b_phrase = build if "build" in build.lower() else f"{build} build"
+            attr_items.append(f"{cls._article(b_phrase)} {b_phrase}")
+        if hair_phrase:
+            attr_items.append(hair_phrase)
+        if eyecolor:
+            attr_items.append(f"{eyecolor} eyes")
+        attributes_clause = (f"with {cls._oxford_join(attr_items)}"
+                             if attr_items else "")
+
+        # Height. Words like "tall" or "petite" already stand alone; a bare
+        # measurement ("six feet") needs "tall" appended.
+        if height:
+            markers = ("tall", "short", "petite", "height", "statuesque")
+            height_clause = (height if any(mk in height.lower() for mk in markers)
+                             else f"{height} tall")
+        else:
+            height_clause = ""
+
+        trailing = " ".join(p for p in [height_clause, attributes_clause] if p)
+
+        parts = [p for p in [head, trailing] if p]
+        body = ", ".join(parts)
+
+        if not body and not name:
+            return ""
+
+        if name:
+            sentence = f"{name}, {body}" if body else name
+        else:
+            sentence = body[0].upper() + body[1:]
+
+        sentence = sentence.rstrip(".")
+        return sentence + "." if sentence else ""
 
     @classmethod
     def _voice_phrase(cls, e):

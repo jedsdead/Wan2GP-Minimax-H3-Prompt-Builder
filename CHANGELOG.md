@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-08-08
+
+### Added
+
+- **Character creator**, per cast/subject entry. A "Use character creator"
+  checkbox above the Description field reveals name plus eight dropdowns —
+  ethnicity, gender, age range, height, build, hairstyle, hair colour, eye
+  colour, all typeable — and an **Add to description** button that composes
+  and writes a physical-description sentence:
+
+  > John, an Asian male in his mid-40s, six feet tall with a muscular build,
+  > long straight black hair and brown eyes.
+
+  Every field is optional and the grammar adjusts to whatever is filled in -
+  dropping fields removes them cleanly rather than leaving a gap, a stray
+  comma, or a missing connector. `bald` and `shaved head` become noun phrases
+  ("a bald head") so they read as list items alongside build and eyes rather
+  than a stray adjective; non-binary and androgynous genders get "person"
+  appended since they function as adjectives, unlike male/female. The button
+  overwrites the Description field.
+- **Speaker names in the beat "Who" dropdown.** Once a character creator name
+  is set, every beat's Who dropdown shows `Subject 1 (John)` instead of the
+  bare `Subject 1`, purely as a memory aid when juggling several subjects. The
+  stored value and the final prompt are unaffected — it's still
+  `Subject N` / `(Sx)` throughout.
+
 ## [1.4.1] — 2026-08-08
 
 ### Fixed

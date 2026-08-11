@@ -142,8 +142,23 @@ One list for everything that appears — people, animals, places, props. Each
 entry becomes a `<Subject N>` definition, and the shot text refers to the label
 rather than repeating the description.
 
-Only the description is required. **Speaker** is assigned by you, not derived
-from position: if entry 2 is a car and entry 3 talks, entry 3 can be S2.
+Only the description is required. **Use character creator** reveals a small
+casting sheet - name, ethnicity, gender, age range, height, build, hairstyle,
+hair colour, eye colour - with an **Add to description** button that composes
+a sentence like:
+
+> John, an Asian male in his mid-40s, six feet tall with a muscular build,
+> long straight black hair and brown eyes.
+
+Every field is optional; leave any of them blank and the grammar adjusts
+rather than leaving a gap. The button overwrites the Description field, so
+type there directly if you'd rather skip the creator. If a name is set, it
+also shows up next to the Subject number in every beat's **Who** dropdown -
+`Subject 1 (John)` - purely to help track several subjects; the prompt itself
+still reads `Subject N` / `(Sx)`.
+
+**Speaker** is assigned by you, not derived from position: if entry 2 is a
+car and entry 3 talks, entry 3 can be S2.
 
 Tick **Use reference mode (Ref2VA)** at the top of the panel to reveal the
 reference fields on every entry, along with the Reference task section. They

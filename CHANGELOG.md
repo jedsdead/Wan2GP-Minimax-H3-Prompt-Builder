@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-08-13
+
+### Fixed
+
+- **WanGP compatibility requirement was blocking installs on unrelated
+  versions.** `wan2gp_version` in `plugin_info.json` had been set to the exact
+  WanGP release current at packaging time (12.452), but WanGP's plugin manager
+  treats that field as a *minimum required version*
+  (`is_wangp_compatible`), not a "built against" label. The plugin uses no
+  version-specific APIs - nothing beyond `insert_after`, `request_component`
+  and `request_global`, stable throughout this project - so there was never a
+  genuine reason to require any particular release.
+- Clearing the field to an empty string did not fix this: WanGP's catalog
+  merge (`_merge_entry_fields`) treats a blank local value as *absent* and
+  refills it from a cached or remote copy of the plugin's metadata, which can
+  still hold the old requirement. The field is now `"1.0"` - a real, non-blank
+  value low enough to be satisfied by any realistic WanGP release, so it wins
+  the merge outright rather than falling through to a stale cache.
+
+### Notes
+
+If this is still reported after updating, WanGP may be reading a cached entry
+from `plugins_local.json` in the WanGP root rather than this file. Closing
+WanGP, deleting that plugin's entry from `plugins_local.json` (or the whole
+file, which regenerates), and restarting clears it.
+
 ## [1.5.0] — 2026-08-08
 
 ### Added

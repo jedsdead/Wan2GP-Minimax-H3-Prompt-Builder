@@ -303,6 +303,8 @@ components at load time.
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+If WanGP reports needing a specific version to install this plugin after updating, it may be reading a cached entry in `plugins_local.json` rather than this repo's current `plugin_info.json`. Delete that plugin's entry (or the whole file, which regenerates) and restart WanGP.
+
 ## Licence
 
 MIT

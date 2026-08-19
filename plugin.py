@@ -19,7 +19,17 @@ beat, or its anchor if it has no beats.
 
 The builder owns the mechanical parts: angle-bracket reference tags, shot
 timestamps, intra-shot beat timing, speaker IDs, <d> wrapping, retention
-markers, task-type prefixes and N/A placeholders.
+markers, task-type prefixes and N/A placeholders. It also writes the phrasing
+the spec fixes rather than leaves open - the voiceover clause and its
+closed-lips follow-up, <scenetrans> at both connecting points with the
+continuity stated in words, <cutoff> for speech the clip ends in the middle
+of, and on-screen text quoted verbatim.
+
+AUDIO SUGGESTIONS
+  The Audio section can hand the scene to WanGP's own Prompt Enhancer and
+  have it write the soundscape and score. See the bridge below the imports;
+  it borrows the enhancer WanGP already holds where it can, and loads one at
+  the configured level where it cannot.
 
 REFERENCE LINKING
   Each cast/subject entry has an opt-in reference block. Ticking "Is a
@@ -38,11 +48,517 @@ KNOWN SHAPE
     long generation.
 """
 
+import gc
+import json
 import re
+import sys
 
 import gradio as gr
 
 from shared.utils.plugins import WAN2GPPlugin
+
+
+# =============================================================================
+# Prompt Enhancer bridge
+# =============================================================================
+#
+# The button borrows WanGP's Prompt Enhancer. Three ways to reach it, tried in
+# order, because where the model lives depends on the WanGP version and on
+# whether an enhancement has been run yet this session:
+#
+#   1. mmgp's offload pipe. When the enhancer is enabled, WanGP registers it
+#      alongside the video model under "prompt_enhancer_llm_model" - this is
+#      the "Hooked to model 'prompt_enhancer_llm_model'" line in the console.
+#      Weights reached this way are already managed, so calling generate()
+#      pulls them onto the GPU and the profile puts them back afterwards.
+#   2. A PromptEnhancerRuntime sitting in a wgp.py global.
+#   3. Loading it here, on demand, at the level set in the Configuration tab,
+#      downloading the weights first if they are missing. This copy is ours:
+#      it is not part of the offload profile, so it is moved to the GPU for
+#      the call and released after unless ENHANCER_KEEP_LOADED is set.
+#
+# None of this is documented API. Every step is probed, nothing raises into
+# the console, and a failure reports what it did and did not find so the
+# problem is visible from the panel rather than only in a terminal.
+
+# Generous, because the Qwen enhancers may reason before answering and a
+# reply truncated mid-<think> leaves nothing to parse.
+ENHANCER_MAX_NEW_TOKENS = 1024
+
+# Keep a self-loaded enhancer resident between presses. Much faster on the
+# second press, but it holds several GB the video model may want. A borrowed
+# enhancer is unaffected either way - this only governs our own copy.
+ENHANCER_KEEP_LOADED = False
+
+# Levels worth offering. 1 (Llama 3.2) and 2 (JoyCaption) are captioners and
+# will not reliably return the JSON this asks for; 3 and 4 are the Qwen 3.5
+# 4B and 9B variants, which will.
+ENHANCER_CAPABLE_LEVELS = (3, 4)
+
+# Where the enhancer's language model is registered in the offload pipe.
+ENHANCER_PIPE_KEY = "prompt_enhancer_llm_model"
+
+AUDIO_SYSTEM_PROMPT = """You are a supervising sound editor. You will be given three blocks: SCENE, SOUNDSCAPE DIRECTION and SCORE DIRECTION.
+
+Write two things.
+
+soundscape - the diegetic sound bed, meaning everything a microphone standing in that scene would pick up: room tone, weather, surfaces, machinery, footsteps, cloth, breath, crowd. Base it on the SCENE block and on SOUNDSCAPE DIRECTION only. Where direction is already given, build on it and fill the gaps around it rather than restating it or contradicting it. Where none is given, work it out from the setting, the atmosphere and what happens.
+
+music - the non-diegetic score, meaning the instrumentation, speed, rhythm and changes in volume of music only the audience hears. Base it on the SCORE DIRECTION block. Where a style or a choice is already given, develop it into specific instrumentation and tempo. Where none is given, work out a score that suits the scene as described. If the scene plainly wants no score, write exactly: none
+
+Rules:
+- Do not transcribe or invent dialogue. Spoken words are handled elsewhere.
+- Music the characters can hear on screen is handled elsewhere. Leave it out of both fields.
+- Say nothing about camera, framing, lens, movement, colour, editing or performance.
+- For music, name instruments, tempo, rhythm and dynamics. Do not use mood words and do not explain what the score does for the audience emotionally. Write "sparse piano at a slow tempo, joined by sustained low strings that swell and fade", not "a tense, melancholy piano theme".
+- One or two sentences each, present tense, no line breaks.
+- Use only what the blocks support. Do not add locations, objects or events that are not in them.
+
+Return only this JSON object and nothing else:
+{"soundscape": "...", "music": "..."}"""
+
+# Used only when the first reply parses to nothing. Shorter, blunter, and it
+# forgoes the reasoning that caused the truncation in the first place.
+AUDIO_RETRY_PROMPT = """Read the scene below and answer with one JSON object and nothing else. No preamble, no explanation, no reasoning.
+
+{"soundscape": "<one sentence of diegetic sound: ambience, surfaces, weather, footsteps, breath>", "music": "<one sentence naming instruments, tempo and rhythm for the score, or the single word none>"}
+
+No dialogue. No camera. No mood words in the music."""
+
+_ENH_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
+_ENH_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+_ENH_TAG_RE = re.compile(r"<[^<>\n]{0,60}>")
+_ENH_LABEL_RE = re.compile(
+    r'^\s*[-*"\']?\s*(overall_soundscape|non_diegetic_music|soundscape|music|score|ambience)'
+    r'"?\s*[:\-]\s*(.+)$',
+    re.I,
+)
+
+# Our own copy, if we ended up loading one.
+_ENHANCER_OWNED = {"model": None, "tokenizer": None}
+
+
+class EnhancerUnavailable(Exception):
+    """Raised with a sentence fit to show the user."""
+
+
+def _wgp_module():
+    """The running wgp.py, whatever name it ended up imported under."""
+    for name in ("wgp", "__main__"):
+        mod = sys.modules.get(name)
+        if mod is not None and hasattr(mod, "server_config"):
+            return mod
+    for mod in list(sys.modules.values()):
+        try:
+            if getattr(mod, "__name__", "").rsplit(".", 1)[-1] == "wgp" \
+                    and hasattr(mod, "server_config"):
+                return mod
+        except Exception:
+            continue
+    return None
+
+
+def _server_config():
+    mod = _wgp_module()
+    cfg = getattr(mod, "server_config", None) if mod is not None else None
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _config_int(keys, default=None):
+    cfg = _server_config()
+    for key in keys:
+        if key in cfg:
+            try:
+                return int(cfg[key])
+            except (TypeError, ValueError):
+                pass
+    return default
+
+
+def _config_str(keys, default=""):
+    cfg = _server_config()
+    for key in keys:
+        value = cfg.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return default
+
+
+def _enhancer_level():
+    """The configured Prompt Enhancer level, or None if it can't be read."""
+    return _config_int(("enhancer_enabled", "prompt_enhancer", "enhancer",
+                        "enhancer_mode", "prompt_enhancer_enabled"))
+
+
+def _offload_pipe():
+    """
+    The dict mmgp keeps its managed models in. Looked up by attribute name
+    first so nothing unexpected gets touched; the sweep is a fallback and
+    only inspects objects whose class name marks them as an offload object.
+    """
+    mod = _wgp_module()
+    if mod is None:
+        return {}
+    found = {}
+    for name in ("offloadobj", "offload_obj", "offloadobject",
+                 "offload_object", "offloadobj_prompt_enhancer"):
+        pipe = getattr(getattr(mod, name, None), "pipe", None)
+        if isinstance(pipe, dict):
+            found.update(pipe)
+    if found:
+        return found
+    try:
+        for value in list(vars(mod).values()):
+            if type(value).__name__.lower().startswith("offload"):
+                pipe = getattr(value, "pipe", None)
+                if isinstance(pipe, dict):
+                    found.update(pipe)
+    except Exception:
+        pass
+    return found
+
+
+def _tokenizer_for(model):
+    """
+    The Qwen 3.5 loader hangs the tokenizer off the model, which is what
+    makes a model borrowed straight from the pipe usable on its own.
+    """
+    for attr in ("_prompt_enhancer_tokenizer", "tokenizer"):
+        tok = getattr(model, attr, None)
+        if tok is not None:
+            return tok
+    return None
+
+
+def _from_pipe():
+    model = _offload_pipe().get(ENHANCER_PIPE_KEY)
+    if model is None:
+        return None
+    tok = _tokenizer_for(model)
+    # generate_messages carries its own tokenizer; the plain path needs one.
+    if tok is None and not hasattr(model, "generate_messages"):
+        return None
+    return model, tok, "borrowed from WanGP"
+
+
+def _from_runtime_global():
+    try:
+        from shared.prompt_enhancer.loader import PromptEnhancerRuntime
+    except Exception:
+        return None
+    mod = _wgp_module()
+    if mod is None:
+        return None
+
+    def usable(value):
+        return (isinstance(value, PromptEnhancerRuntime)
+                and getattr(value, "llm_model", None) is not None)
+
+    candidates = [getattr(mod, name, None) for name in
+                  ("prompt_enhancer_runtime", "prompt_enhancer",
+                   "enhancer_runtime")]
+    try:
+        candidates.extend(vars(mod).values())
+    except Exception:
+        pass
+    for value in candidates:
+        if usable(value):
+            tok = value.llm_tokenizer or _tokenizer_for(value.llm_model)
+            return value.llm_model, tok, "borrowed from WanGP"
+    return None
+
+
+def _load_our_own(level):
+    """
+    Load the enhancer ourselves, fetching the weights if they are missing.
+    Slower than borrowing - seconds to a minute the first time - but it means
+    the button works without having run an enhancement first.
+    """
+    if _ENHANCER_OWNED["model"] is not None:
+        return (_ENHANCER_OWNED["model"], _ENHANCER_OWNED["tokenizer"],
+                "loaded by the builder")
+
+    try:
+        from shared.prompt_enhancer.loader import (
+            download_prompt_enhancer_assets,
+            load_prompt_enhancer_runtime,
+        )
+    except Exception as exc:
+        raise EnhancerUnavailable(
+            f"this build's prompt_enhancer package looks different ({exc})")
+
+    backend = _config_str(("enhancer_quantization", "prompt_enhancer_backend",
+                           "qwen_backend"), "quanto_int8")
+    engine = _config_str(("lm_decoder_engine", "prompt_enhancer_lm_engine",
+                          "llm_engine"), "")
+
+    try:
+        download_prompt_enhancer_assets(level, qwen_backend=backend)
+    except Exception as exc:
+        raise EnhancerUnavailable(f"the weights could not be fetched ({exc})")
+
+    def _no_download(**_kw):
+        return None            # assets ensured just above
+
+    try:
+        runtime = load_prompt_enhancer_runtime(
+            _no_download,
+            enhancer_enabled=level,
+            lm_decoder_engine=engine,
+            qwen_backend=backend,
+        )
+    except TypeError:
+        try:
+            runtime = load_prompt_enhancer_runtime(_no_download, level)
+        except Exception as exc:
+            raise EnhancerUnavailable(
+                f"the enhancer would not load ({type(exc).__name__}: {exc})")
+    except Exception as exc:
+        raise EnhancerUnavailable(
+            f"the enhancer would not load ({type(exc).__name__}: {exc})")
+
+    model = getattr(runtime, "llm_model", None)
+    if model is None:
+        raise EnhancerUnavailable("the enhancer loaded without a language model")
+    tok = getattr(runtime, "llm_tokenizer", None) or _tokenizer_for(model)
+
+    # Ours is not in the offload profile, so nothing else will move it.
+    try:
+        import torch
+        if torch.cuda.is_available() and hasattr(model, "to"):
+            model.to("cuda")
+    except Exception:
+        pass
+
+    _ENHANCER_OWNED["model"] = model
+    _ENHANCER_OWNED["tokenizer"] = tok
+    return model, tok, "loaded by the builder"
+
+
+def _release_our_own():
+    """Give our copy's VRAM back. A borrowed model is never touched."""
+    model = _ENHANCER_OWNED["model"]
+    if model is None:
+        return
+    _ENHANCER_OWNED["model"] = None
+    _ENHANCER_OWNED["tokenizer"] = None
+    try:
+        from shared.prompt_enhancer.loader import unload_prompt_enhancer_models
+        unload_prompt_enhancer_models(model)
+    except Exception:
+        pass
+    try:
+        if hasattr(model, "to"):
+            model.to("cpu")
+    except Exception:
+        pass
+    del model
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _probe_report():
+    """What the resolver can and cannot see, for when it comes back empty."""
+    mod = _wgp_module()
+    pipe = _offload_pipe()
+    enhancer_keys = [k for k in pipe if "enhancer" in str(k).lower()]
+    level = _enhancer_level()
+    return (
+        f"wgp module {'found' if mod is not None else 'not found'}; "
+        f"enhancer level {level if level is not None else 'unreadable'}; "
+        f"offload pipe holds {len(pipe)} model(s)"
+        + (f", enhancer entries {enhancer_keys}" if enhancer_keys
+           else ", no enhancer entry")
+        + f"; own copy {'held' if _ENHANCER_OWNED['model'] is not None else 'none'}"
+    )
+
+
+def _get_enhancer():
+    """(model, tokenizer, how_it_was_obtained), or raise EnhancerUnavailable."""
+    level = _enhancer_level()
+    if level is not None and level not in ENHANCER_CAPABLE_LEVELS:
+        if level <= 0:
+            raise EnhancerUnavailable(
+                "the **Prompt Enhancer** is switched off - turn it on in the "
+                "Configuration tab and pick a Qwen 3.5 one")
+        raise EnhancerUnavailable(
+            "the selected **Prompt Enhancer** is a captioning model and will "
+            "not follow this instruction - switch to a Qwen 3.5 one in the "
+            "Configuration tab")
+
+    for finder in (_from_pipe, _from_runtime_global):
+        try:
+            found = finder()
+        except Exception:
+            found = None
+        if found:
+            return found
+
+    if level is None:
+        raise EnhancerUnavailable(
+            "nothing is loaded and the Prompt Enhancer setting could not be "
+            "read, so there is nothing to load either - " + _probe_report())
+    return _load_our_own(level)
+
+
+def _run_enhancer(system_prompt, user_text,
+                  max_new_tokens=ENHANCER_MAX_NEW_TOKENS):
+    """
+    One text-only completion through the Prompt Enhancer, with our own system
+    prompt in place of its cinematic one.
+
+    Returns (text, source) on success or (None, reason) on failure.
+    """
+    try:
+        model, tokenizer, source = _get_enhancer()
+    except EnhancerUnavailable as exc:
+        return None, str(exc)
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}. {_probe_report()}"
+
+    try:
+        from shared.prompt_enhancer.prompt_enhance_utils import (
+            generate_cinematic_prompt,
+        )
+    except Exception as exc:
+        if not ENHANCER_KEEP_LOADED:
+            _release_our_own()
+        return None, f"could not reach the Prompt Enhancer ({exc})"
+
+    # Thinking is the main way this fails: the reasoning eats the token
+    # budget, generation stops before the answer, and there is nothing to
+    # parse. The keyword argument below is not honoured by every build - a
+    # model borrowed from the pipe carries the flag WanGP set at load time -
+    # so the flag is also set on the object, and /no_think appended to the
+    # text, which the Qwen 3 chat templates understand on their own.
+    thinking_attr = "_prompt_enhancer_enable_thinking"
+    had_thinking = getattr(model, thinking_attr, None)
+    try:
+        setattr(model, thinking_attr, False)
+    except Exception:
+        had_thinking = None
+    if not user_text.rstrip().endswith("/no_think"):
+        user_text = user_text.rstrip() + "\n\n/no_think"
+
+    # images=None takes the text-only path, so no vision tower is touched.
+    call = dict(
+        images=None,
+        max_new_tokens=max_new_tokens,
+        prompt_enhancer_instructions=system_prompt,
+        do_sample=False,
+        thinking_enabled=False,
+    )
+    trimmed = {k: v for k, v in call.items()
+               if k not in ("thinking_enabled", "do_sample")}
+
+    out, error = None, None
+    for attempt in (call, trimmed):
+        try:
+            out = generate_cinematic_prompt(
+                None, None, model, tokenizer, user_text, **attempt)
+            error = None
+            break
+        except TypeError as exc:
+            error = f"this build's enhancer takes different arguments ({exc})"
+            continue
+        except Exception as exc:
+            error = f"the enhancer raised {type(exc).__name__}: {exc}"
+            break
+
+    if had_thinking is not None:
+        try:
+            setattr(model, thinking_attr, had_thinking)
+        except Exception:
+            pass
+    if not ENHANCER_KEEP_LOADED:
+        _release_our_own()
+
+    if error:
+        return None, error
+    if not out:
+        return None, "the enhancer returned nothing"
+    return (out[0] or "").strip(), source
+
+
+def _strip_thinking(text):
+    """
+    Remove a reasoning block. A closed <think>...</think> is cut out; an
+    unclosed one means generation was truncated mid-thought, so everything
+    from it onward is dropped and whatever came before is kept.
+    """
+    text = _ENH_THINK_RE.sub("", text or "")
+    open_at = text.find("<think>")
+    if open_at != -1:
+        text = text[:open_at]
+    return text.strip()
+
+
+def _clean_audio_line(text):
+    """One clean line, safe to drop into a prompt field."""
+    text = _ENH_TAG_RE.sub("", str(text or ""))
+    text = " ".join(text.split())
+    text = text.strip().strip('"').strip("'").strip()
+    m = _ENH_LABEL_RE.match(text)
+    if m:
+        text = m.group(2).strip().strip('"').strip("'").strip()
+    return text
+
+
+def _parse_audio_reply(raw):
+    """Pull (soundscape, music) out of the reply. JSON first, prose second."""
+    text = _strip_thinking(raw)
+    text = _ENH_FENCE_RE.sub("", text).strip()
+
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            blob = json.loads(text[start:end + 1])
+        except ValueError:
+            blob = None
+        if isinstance(blob, dict):
+            lower = {str(k).lower(): v for k, v in blob.items()}
+            return (_clean_audio_line(lower.get("soundscape")
+                                      or lower.get("overall_soundscape")),
+                    _clean_audio_line(lower.get("music")
+                                      or lower.get("non_diegetic_music")))
+
+    found = {"soundscape": "", "music": ""}
+    for line in text.split("\n"):
+        m = _ENH_LABEL_RE.match(line)
+        if not m:
+            continue
+        tag = m.group(1).lower()
+        key = ("music" if tag in ("music", "score", "non_diegetic_music")
+               else "soundscape")
+        if not found[key]:
+            found[key] = _clean_audio_line(m.group(2))
+    if found["soundscape"] or found["music"]:
+        return found["soundscape"], found["music"]
+
+    # Last resort: a well-formed answer that simply ignored the format. One
+    # line is the soundscape, two lines are the soundscape and the score.
+    # Anything that reads as the model talking to the user rather than
+    # describing sound is rejected - a refusal is not a soundscape.
+    chatter = ("i ", "i'", "sorry", "as an", "here", "sure", "okay", "ok,",
+               "certainly", "of course", "note", "please", "unfortunately")
+
+    def usable(line):
+        low = line.lower()
+        return (15 <= len(line) < 400
+                and not low.startswith(chatter))
+
+    lines = [_clean_audio_line(l) for l in text.split("\n")]
+    lines = [l for l in lines if l]
+    if len(lines) == 1 and usable(lines[0]):
+        return lines[0], ""
+    if len(lines) == 2 and all(usable(l) for l in lines):
+        return lines[0], lines[1]
+    return "", ""
 
 
 # =============================================================================
@@ -314,6 +830,44 @@ CHAR_HAIR_COLORS = [
 CHAR_EYE_COLORS = [
     "", "brown", "dark brown", "blue", "light blue", "green", "hazel",
     "grey", "amber", "black",
+]
+
+# Phrased to follow "wearing", so anything typed here should read the same
+# way - "a rumpled trenchcoat", not "trenchcoat" or "he wears a trenchcoat".
+# An entry that already carries its own verb ("dressed in ...") is used as
+# written instead.
+CHAR_CLOTHING = [
+    "", "a plain white t-shirt and jeans", "a rumpled trenchcoat",
+    "a tailored black suit", "a navy three-piece suit",
+    "a floral summer dress", "a long evening gown",
+    "a hooded sweatshirt and joggers", "a leather biker jacket",
+    "a wool overcoat and scarf", "a knitted jumper and corduroys",
+    "a white lab coat over scrubs", "chef's whites and an apron",
+    "a stained apron over a work shirt",
+    "a high-visibility jacket and work boots",
+    "a police uniform", "a military field uniform", "a school uniform",
+    "worn workwear, patched at the knees", "traditional formal dress",
+    "a bathrobe", "full winter gear with gloves and a hat",
+]
+
+
+# The guide sanctions four wordings for audio crossing a cut. Three look
+# forward from the shot that starts the line; the fourth looks back, and is
+# written automatically on the receiving side, so it is not offered here.
+CARRY_PHRASES = [
+    "continues seamlessly across the cut",
+    "continues uninterrupted into the next shot",
+    "remains audible across the transition",
+]
+
+# What is carrying the on-screen text. Phrased with its article so the
+# sentence reads "A neon sign reading ... is visible in the frame."
+SCREEN_TEXT_KINDS = [
+    "a sign", "a neon sign", "a shopfront sign", "a street sign",
+    "a banner", "a poster", "a label", "a subtitle", "a caption",
+    "a screen", "a phone screen", "a handwritten note", "a letter",
+    "a newspaper headline", "a book cover", "a badge", "a licence plate",
+    "a printed T-shirt", "a chalkboard", "a departure board",
 ]
 
 
@@ -673,6 +1227,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 e_char_hairstyle = dd(CHAR_HAIRSTYLES, "Hairstyle")
                                 e_char_haircolor = dd(CHAR_HAIR_COLORS, "Hair colour")
                                 e_char_eyecolor = dd(CHAR_EYE_COLORS, "Eye colour")
+                            with gr.Row():
+                                e_char_clothing = dd(CHAR_CLOTHING, "Clothing")
                             e_add_to_desc = gr.Button(
                                 "Add to description", size="sm",
                             )
@@ -689,7 +1245,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             inputs=[e_char_name, e_char_ethnicity, e_char_gender,
                                     e_char_age, e_char_height, e_char_build,
                                     e_char_hairstyle, e_char_haircolor,
-                                    e_char_eyecolor],
+                                    e_char_eyecolor, e_char_clothing],
                             outputs=[e_desc],
                         )
                         with gr.Row():
@@ -768,6 +1324,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         "char_hairstyle": e_char_hairstyle,
                         "char_haircolor": e_char_haircolor,
                         "char_eyecolor": e_char_eyecolor,
+                        "char_clothing": e_char_clothing,
                         "age": e_age, "gender": e_gender, "pitch": e_pitch,
                         "timbre": e_timbre, "rate": e_rate, "accent": e_accent,
                         "lang": e_lang,
@@ -875,6 +1432,20 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             placeholder=shot_ex["anchor"],
                         )
 
+                        with gr.Row():
+                            sh_screen_kind = gr.Dropdown(
+                                [""] + SCREEN_TEXT_KINDS,
+                                label="Visible text is on", value="",
+                                allow_custom_value=True,
+                            )
+                            sh_screen_text = gr.Textbox(
+                                label="Visible text",
+                                placeholder="OPEN",
+                                info="Words actually readable on screen. "
+                                     "Written verbatim inside double quotes, "
+                                     "never translated",
+                            )
+
                         beats = []
                         beat_count = gr.State(0)
                         for bi in range(MAX_BEATS):
@@ -884,10 +1455,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             with gr.Group(visible=False) as bgrp:
                                 with gr.Row():
                                     b_type = gr.Dropdown(
-                                        ["action", "dialogue"], label="Type",
-                                        value="action",
-                                        info="Label only - a beat becomes "
-                                             "dialogue when it has spoken words",
+                                        ["action", "dialogue", "voiceover"],
+                                        label="Type", value="action",
+                                        info="action and dialogue are labels "
+                                             "- a beat becomes dialogue when "
+                                             "it has spoken words. voiceover "
+                                             "changes the output: it writes "
+                                             "the spec's required phrasing "
+                                             "and the closed-lips clause",
                                     )
                                     b_speaker = gr.Dropdown(
                                         [(f"Subject {n + 1}", f"Subject {n + 1}")
@@ -926,11 +1501,29 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                         label="Line carries across the next cut",
                                         value=False,
                                     )
+                                    b_carry_phrase = gr.Dropdown(
+                                        CARRY_PHRASES, label="How it carries",
+                                        value=CARRY_PHRASES[0],
+                                        allow_custom_value=True,
+                                        info="Only used when the box above "
+                                             "is ticked. The next shot's "
+                                             "matching line is written for "
+                                             "you",
+                                    )
+                                    b_cutoff = gr.Checkbox(
+                                        label="Speech runs past the end",
+                                        value=False,
+                                        info="Writes <cutoff> - the clip ends "
+                                             "mid-line rather than waiting "
+                                             "for the speaker to finish",
+                                    )
                             beats.append({
                                 "group": bgrp, "type": b_type,
                                 "speaker": b_speaker, "lang": b_lang,
                                 "action": b_action, "speech": b_speech,
                                 "at": b_at, "carries": b_carries,
+                                "cutoff": b_cutoff,
+                                "carry_phrase": b_carry_phrase,
                             })
 
                         with gr.Row():
@@ -952,7 +1545,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         "framing": sh_framing, "lens": sh_lens,
                         "motion": sh_motion, "rig": sh_rig,
                         "ampl": sh_ampl, "speed": sh_speed,
-                        "anchor": sh_anchor, "beat_count": beat_count,
+                        "anchor": sh_anchor,
+                        "screen_kind": sh_screen_kind,
+                        "screen_text": sh_screen_text,
+                        "beat_count": beat_count,
                         "beats": beats,
                     })
 
@@ -1017,6 +1613,20 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         music_retention = gr.Dropdown(
                             [""] + AUDIO_RETENTION, label="Retention", value="",
                         )
+                with gr.Row():
+                    suggest_audio_btn = gr.Button(
+                        "Suggest soundscape and music from the scene",
+                        size="sm",
+                    )
+                audio_status = gr.Markdown("")
+                gr.Markdown(
+                    "Reads the scene, shots and beats above and asks WanGP's "
+                    "**Prompt Enhancer** what this should sound like. It "
+                    "writes the two custom boxes and leaves the presets "
+                    "alone. Needs the enhancer switched on and loaded - a "
+                    "Qwen 3.5 one; the captioning enhancers will not follow "
+                    "the instruction."
+                )
 
             status = gr.Markdown("")
 
@@ -1079,14 +1689,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         for s in shots:
             flat += [s["cut"], s["cutverb"], s["framing"], s["lens"],
                      s["motion"], s["ampl"], s["speed"], s["rig"],
-                     s["anchor"], s["beat_count"]]
+                     s["anchor"], s["screen_kind"], s["screen_text"],
+                     s["beat_count"]]
             for b in s["beats"]:
                 flat += [b["type"], b["speaker"], b["lang"], b["action"],
-                         b["speech"], b["at"], b["carries"]]
+                         b["speech"], b["at"], b["carries"], b["cutoff"],
+                         b["carry_phrase"]]
         flat += [ambience_from, ambience_retention,
                  soundscape_presets, soundscape,
                  music_from, music_role, music_retention,
                  music_presets, music]
+
+        suggest_audio_btn.click(
+            fn=self._suggest_audio, inputs=flat,
+            outputs=[soundscape, music, audio_status],
+        )
 
         insert_btn.click(fn=self._build, inputs=flat,
                          outputs=[self.prompt, status])
@@ -1101,10 +1718,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         for s in shots:
             shot_fields += [s["cut"], s["cutverb"], s["framing"], s["lens"],
                             s["motion"], s["ampl"], s["speed"], s["rig"],
-                            s["anchor"], s["beat_count"]]
+                            s["anchor"], s["screen_kind"], s["screen_text"],
+                            s["beat_count"]]
             for b in s["beats"]:
                 shot_fields += [b["type"], b["speaker"], b["lang"],
-                                b["action"], b["speech"], b["at"], b["carries"]]
+                                b["action"], b["speech"], b["at"],
+                                b["carries"], b["cutoff"], b["carry_phrase"]]
         shot_groups = [s["group"] for s in shots]
         for s in shots:
             shot_groups += [b["group"] for b in s["beats"]]
@@ -1147,11 +1766,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             e["char_ethnicity"], e["char_gender"],
                             e["char_age"], e["char_height"], e["char_build"],
                             e["char_hairstyle"], e["char_haircolor"],
-                            e["char_eyecolor"]]
+                            e["char_eyecolor"], e["char_clothing"]]
             char_blocks.append(e["creator_block"])
 
         def _reset_char_fields():
-            per_entry = [False, "", "", "", "", "", "", "", "", ""]
+            per_entry = [False, "", "", "", "", "", "", "", "", "", ""]
             return per_entry * len(entries) + [gr.update(visible=False)] * len(char_blocks)
 
         clear_btn.click(fn=_reset_char_fields, inputs=[],
@@ -1439,7 +2058,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     @classmethod
     def _character_description(cls, name, ethnicity, gender, age_range,
-                               height, build, hairstyle, haircolor, eyecolor):
+                               height, build, hairstyle, haircolor, eyecolor,
+                               clothing=""):
         """
         Compose a physical-description sentence from the character-creator
         fields. Every part is optional and the grammar adjusts to whatever is
@@ -1455,6 +2075,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         hairstyle = cls._s(hairstyle)
         haircolor = cls._s(haircolor)
         eyecolor = cls._s(eyecolor)
+        clothing = cls._s(clothing)
 
         # "male"/"female" already work as bare nouns ("a male"). Anything
         # else in the gender field - non-binary, androgynous - is really an
@@ -1516,7 +2137,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         trailing = " ".join(p for p in [height_clause, attributes_clause] if p)
 
-        parts = [p for p in [head, trailing] if p]
+        # Clothing goes last, after the physical description, so the
+        # sentence reads as a person first and an outfit second. A value
+        # that already carries its own verb is used as written.
+        if clothing:
+            worn = ("wearing", "dressed", "clad", "in ")
+            clothing_clause = (clothing
+                               if clothing.lower().startswith(worn)
+                               else f"wearing {clothing}")
+        else:
+            clothing_clause = ""
+
+        parts = [p for p in [head, trailing, clothing_clause] if p]
         body = ", ".join(parts)
 
         if not body and not name:
@@ -1584,7 +2216,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return clause + "."
 
     @classmethod
-    def _beat_text(cls, beat, label_for, lang_for=None, lang_default="English"):
+    def _beat_text(cls, beat, label_for, lang_for=None, lang_default="English",
+                   speaker_info=None):
         """
         A beat refers to subjects by label. Descriptions live in
         subject_definitions, so the shot text stays short and the same
@@ -1642,20 +2275,79 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         else:
             lead = (subject_text[0].upper() + subject_text[1:]
                     if subject_text[:1].isalpha() else subject_text)
-        if action:
+        # Voiceover has required phrasing in the spec: the exact clause
+        # "says in an off-screen voiceover", and a statement immediately
+        # after the </d> block that the on-screen character's lips stay shut.
+        voiceover = (cls._s(beat.get("type")).lower() == "voiceover"
+                     and bool(speech))
+        if voiceover:
+            # Whatever delivery was typed is kept as a preceding action, but
+            # a trailing "says" is dropped so it cannot collide with the
+            # required phrase and produce "says quietly and says in an ...".
+            trimmed = re.sub(r"[\s,]*\b(?:and\s+)?says?\b[\s,]*$", "",
+                             action, flags=re.I).strip(" ,")
+            if trimmed:
+                lead += " " + trimmed[0].lower() + trimmed[1:] + " and"
+            # The spec's phrase is "says in an off-screen voiceover"; several
+            # speakers sharing one line take the plural verb, matching the
+            # guide's own group-speech examples.
+            verb = "say" if len(picked) > 1 else "says"
+            lead += f" {verb} in an off-screen voiceover"
+        elif action:
             lead += " " + action[0].lower() + action[1:]
 
         if speech:
             sentence = f"{lead}: <d>[{lang}] {speech}</d>"
+            if voiceover:
+                info = {}
+                for p in picked:
+                    info = (speaker_info or {}).get(cls._s(p), {})
+                    if info:
+                        break
+                # The guide's clause is about the on-screen character. A
+                # speaker explicitly marked off-screen has no visible face,
+                # so writing about their lips would describe nothing.
+                if info.get("onscreen") != "off-screen":
+                    if len(picked) > 1:
+                        pronoun = "their"
+                    else:
+                        g = (info.get("gender") or "").lower()
+                        pronoun = ("his" if g == "male"
+                                   else "her" if g == "female" else "their")
+                    sentence += (f" while {pronoun} lips remain completely "
+                                 "closed.")
+            # The lips clause is specified as immediately following the <d>
+            # block, so the continuity tags sit after it.
+            if beat.get("cutoff"):
+                sentence += "<cutoff>"
             if beat.get("carries"):
-                sentence += "<scenetrans>"
+                # Tag at the connecting point, then the continuity stated in
+                # words. The receiving shot writes its own half.
+                phrase = (cls._s(beat.get("carry_phrase"))
+                          or CARRY_PHRASES[0])
+                sentence += f"<scenetrans> The speech {phrase.rstrip('.')}."
             return sentence
 
         return lead + ("" if lead.endswith(".") else ".")
 
     @classmethod
+    def _screen_text_clause(cls, kind, screen_text):
+        """
+        Text actually readable on screen. The guide asks for it verbatim
+        inside English double quotes and never translated, so whatever is
+        typed is quoted as written - any quotes already around it are
+        stripped first rather than doubled up.
+        """
+        screen_text = cls._s(screen_text).strip().strip('"').strip("'").strip()
+        if not screen_text:
+            return ""
+        kind = cls._s(kind) or "a sign"
+        kind = kind[0].upper() + kind[1:]
+        return f'{kind} reading "{screen_text}" is visible in the frame.'
+
+    @classmethod
     def _shot_text(cls, idx, shot, label_for, lang_for=None,
-                   label_after=None):
+                   label_after=None, speaker_info=None, carry_in=False):
         anchor = cls._s(shot["anchor"])
         framing = cls._s(shot["framing"])
         head = f"[Shot {idx + 1}]"
@@ -1686,13 +2378,26 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 lead += f" of {anchor}"
             body = [lead.rstrip(".") + "."]
 
+        # The receiving half of a line that crosses a cut: the tag marks the
+        # connecting point and the sentence states the continuity in words,
+        # both of which the guide asks for.
+        if carry_in:
+            body.append("<scenetrans>The speech carries over from the "
+                        "previous shot.")
+
         cam = cls._camera_clause(shot["motion"], shot["ampl"], shot["speed"],
                                  shot.get("rig"))
         if cam:
             body.append(cam)
 
+        screen = cls._screen_text_clause(shot.get("screen_kind"),
+                                         shot.get("screen_text"))
+        if screen:
+            body.append(screen)
+
         for beat in shot["beats"]:
-            text = cls._beat_text(beat, label_for, lang_for or {})
+            text = cls._beat_text(beat, label_for, lang_for or {},
+                                  speaker_info=speaker_info)
             if text:
                 body.append(text)
                 # Identity is written once; later mentions use the short form.
@@ -1760,6 +2465,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "cut": take(), "cutverb": take(), "framing": take(),
                 "lens": take(), "motion": take(), "ampl": take(),
                 "speed": take(), "rig": take(), "anchor": take(),
+                "screen_kind": take(), "screen_text": take(),
                 "beat_count": take(),
                 "beats": [],
             }
@@ -1767,7 +2473,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 shot["beats"].append({
                     "type": take(), "speaker": take(), "lang": take(),
                     "action": take(), "speech": take(), "at": take(),
-                    "carries": take(),
+                    "carries": take(), "cutoff": take(),
+                    "carry_phrase": take(),
                 })
             shot["beats"] = shot["beats"][:int(cls._s(shot["beat_count"]) or 0)]
             shots.append(shot)
@@ -1931,6 +2638,154 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return draft, note
 
     @classmethod
+    def _audio_digest(cls, d):
+        """
+        What the enhancer reads. Two labelled blocks, because the two fields
+        answer different questions: a soundscape follows from where the scene
+        is and what happens in it, a score follows from style and from
+        whatever score direction has already been given.
+
+        Camera work is left out on purpose. Framing, lens, motion and rig say
+        nothing about what a scene sounds like, and feeding them in pulls the
+        model towards describing the shot instead of the sound.
+        """
+
+        def sentence(text):
+            """Field text is phrased to sit mid-sentence; stand it up."""
+            text = cls._s(text)
+            if not text:
+                return ""
+            text = text[0].upper() + text[1:]
+            return text if text.endswith((".", "!", "?")) else text + "."
+
+        style = cls._s(d["style"])
+        location = cls._s(d["location"])
+        atmosphere = cls._s(d["atmosphere"])
+
+        scene = []
+        if style:
+            scene.append(f"Style: {style}.")
+        if location:
+            scene.append(f"Setting: {location}.")
+        if atmosphere:
+            scene.append(f"Atmosphere: {atmosphere}.")
+
+        shot_content = False
+        for n, shot in enumerate(d["shots"][:max(1, d["shot_count"])]):
+            lines = []
+            anchor = sentence(shot["anchor"])
+            if anchor:
+                lines.append(anchor)
+            for beat in shot["beats"]:
+                action = sentence(beat["action"])
+                if action:
+                    lines.append(action)
+                if cls._s(beat["speech"]):
+                    # The words themselves are withheld - quoting them invites
+                    # the model to echo dialogue back into a field that must
+                    # not contain any.
+                    lines.append("Someone speaks aloud here.")
+            if lines:
+                shot_content = True
+                scene.append(f"Shot {n + 1}: " + " ".join(lines))
+
+        # Nothing about where it is or what happens means nothing to listen
+        # for, and a style on its own would only get invention back.
+        if not (location or atmosphere or shot_content):
+            return ""
+
+        sound_presets = cls._s(d["soundscape_presets"])
+        sound_note = cls._s(d["soundscape"])
+        sound = []
+        if sound_presets:
+            sound.append(f"Already chosen: {sound_presets}.")
+        if sound_note:
+            sound.append(f"Notes: {sound_note.rstrip('.')}.")
+        if not sound:
+            sound.append("Nothing chosen. Work it out from the scene.")
+
+        music_presets = cls._s(d["music_presets"])
+        music_note = cls._s(d["music"])
+        music = []
+        if style:
+            music.append(f"Style: {style}.")
+        if music_presets:
+            music.append(f"Already chosen: {music_presets}.")
+        if music_note:
+            music.append(f"Notes: {music_note.rstrip('.')}.")
+        if not (music_presets or music_note):
+            music.append("Nothing chosen. Work out a score that suits the scene.")
+
+        return ("SCENE\n" + "\n".join(scene)
+                + "\n\nSOUNDSCAPE DIRECTION\n" + "\n".join(sound)
+                + "\n\nSCORE DIRECTION\n" + "\n".join(music))
+
+    @classmethod
+    def _suggest_audio(cls, *values):
+        """
+        Read the scene, shots and beats, and ask WanGP's Prompt Enhancer for
+        a soundscape and a score. Writes the two custom text boxes and leaves
+        the preset dropdowns alone, so a suggestion can always be undone by
+        clearing one field.
+        """
+        d = cls._unpack(values)
+        digest = cls._audio_digest(d)
+        if not digest:
+            return (gr.update(), gr.update(),
+                    "Nothing to work from yet - add a scene, a shot **anchor** "
+                    "or a beat first.")
+
+        raw, note = _run_enhancer(AUDIO_SYSTEM_PROMPT, digest)
+        if raw is None:
+            # The probe line is worth showing: it says which of the three
+            # routes to the enhancer were open, which is the only way to tell
+            # a configuration problem from a version one without a terminal.
+            return (gr.update(), gr.update(),
+                    f"No suggestion: {note}.\n\n*{_probe_report()}*")
+
+        sound, music = _parse_audio_reply(raw)
+        if not sound and not music:
+            # One more pass with a blunter instruction. The usual cause is a
+            # reply that reasoned itself past the token budget, and the retry
+            # prompt forbids the reasoning outright.
+            retry, retry_note = _run_enhancer(AUDIO_RETRY_PROMPT, digest,
+                                              max_new_tokens=512)
+            if retry:
+                raw, note = retry, retry_note
+                sound, music = _parse_audio_reply(raw)
+        if music.strip().lower().rstrip(".") in ("none", "no score",
+                                                 "no music", "n/a", "silence"):
+            music = ""
+
+        if not sound and not music:
+            # Showing the reply is the whole point here - a parse failure is
+            # otherwise indistinguishable from the enhancer misbehaving, and
+            # the raw text says immediately which it was.
+            print("[H3 Prompt Builder] audio suggestion did not parse. "
+                  "Raw reply:\n" + (raw or "<empty>"))
+            excerpt = " ".join((raw or "").split())[:300] or "<empty reply>"
+            return (gr.update(), gr.update(),
+                    "The enhancer replied but nothing usable parsed out of "
+                    "it, twice. The full reply is in the console; it starts:"
+                    f"\n\n> {excerpt}")
+
+        wrote = []
+        if sound:
+            wrote.append("soundscape")
+        if music:
+            wrote.append("music")
+        status = ("Wrote " + " and ".join(wrote) + f" ({note}). "
+                  "Presets were left alone - read it before you build, and "
+                  "edit freely.")
+        if not music:
+            status += (" The enhancer suggested no score, so that field is "
+                       "untouched.")
+
+        return (sound if sound else gr.update(),
+                music if music else gr.update(),
+                status)
+
+    @classmethod
     def _build(cls, *values):
         d = cls._unpack(values)
         start_image = d["start_image"]; end_image = d["end_image"]
@@ -1967,6 +2822,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         label_for = {}          # first mention
         label_after = {}        # every mention after that
         lang_for = {}           # "Subject 3" -> "Japanese"
+        # Voiceover needs a pronoun for the closed-lips clause and needs to
+        # know whether the speaker is visible at all.
+        speaker_info = {}       # "Subject 3" -> {"gender": .., "onscreen": ..}
         skipped = 0
         uses_reference_assets = False
 
@@ -2016,6 +2874,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     label_for[key] = inline
                     label_after[key] = inline
             lang_for[f"Subject {idx + 1}"] = cls._s(e["lang"]) or "English"
+            speaker_info[key] = {
+                "gender": cls._s(e["gender"]),
+                "onscreen": cls._s(e["onscreen"]),
+            }
 
             # Reference assets attached to this entry. The label names the
             # actual slot, so it is never renumbered.
@@ -2064,7 +2926,17 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                       atmosphere, camera_type, duration,
                                       grading)
 
-        shot_lines = [cls._shot_text(n, s, label_for, lang_for, label_after)
+        # A line crossing a cut is marked at both connecting points. The
+        # shot that starts it says so on its own beat; the shot that receives
+        # it is told here, since a shot cannot see the one before it.
+        carry_in, prev_carries = [], False
+        for s in shots:
+            carry_in.append(prev_carries)
+            prev_carries = any(cls._s(b["speech"]) and b.get("carries")
+                               for b in s["beats"])
+
+        shot_lines = [cls._shot_text(n, s, label_for, lang_for, label_after,
+                                     speaker_info, carry_in[n])
                       for n, s in enumerate(shots)]
         body = "\n".join(l for l in ([opening] + shot_lines) if l.strip())
 
@@ -2222,8 +3094,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         out = []
         for si in range(MAX_SHOTS):
             out += ["opening" if si == 0 else None, "-" if si == 0 else "",
-                    "", "", "", "", "", "", "", 0]
-            out += ["action", [], "", "", "", None, False] * MAX_BEATS
+                    "", "", "", "", "", "", "", "", "", 0]
+            out += (["action", [], "", "", "", None, False, False,
+                     CARRY_PHRASES[0]] * MAX_BEATS)
         out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
         out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
         return out
@@ -2249,8 +3122,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # cut, cutverb, framing, lens, motion, ampl, speed, rig,
             # anchor, beats
             out += ["opening" if si == 0 else None, "-" if si == 0 else "",
-                    "", "", "", "", "", "", "", 0]
-            out += ["action", [], "", "", "", None, False] * MAX_BEATS
+                    "", "", "", "", "", "", "", "", "", 0]
+            out += (["action", [], "", "", "", None, False, False,
+                     CARRY_PHRASES[0]] * MAX_BEATS)
         # ambience_from, ambience_retention, soundscape_presets, soundscape,
         # music_from, music_role, music_retention, music_presets, music
         out += ["", "", [], "", "", "style", "", [], ""]

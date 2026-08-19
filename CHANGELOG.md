@@ -5,6 +5,133 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-08-19
+
+The first release where the plugin writes prose it wasn't told to. The Audio
+section can now hand the scene to WanGP's own Prompt Enhancer and have it fill
+in the soundscape and score, which is a different kind of feature to everything
+before it: the rest of the panel assembles what you typed, this asks a model
+what you left out.
+
+Alongside it, three pieces of the spec that the builder had been leaving to you
+are now written properly — voiceover phrasing, `<scenetrans>` on both sides of
+a cut, and `<cutoff>`.
+
+### Added
+
+- **Suggest soundscape and music from the scene.** A button in the Audio
+  section reads what you have built and asks WanGP's Prompt Enhancer what it
+  should sound like, writing the two custom text boxes and leaving the preset
+  dropdowns alone — so a suggestion is always undone by clearing one field.
+
+  The soundscape is drawn from location, atmosphere, style, every shot anchor
+  and the action in every beat, plus any soundscape presets and notes already
+  set. The score is drawn from style, music presets and music notes. Where a
+  choice is already made the model is told to build on it and fill the gaps
+  around it; where none is, it works one out from the scene.
+
+  Camera work is withheld deliberately. Framing, lens, motion and rig say
+  nothing about what a scene sounds like, and feeding them in pulls the model
+  towards describing the shot instead. Dialogue is reported as "someone speaks
+  aloud here" without the words, so there is nothing for it to echo back into a
+  field that must not contain any.
+
+  Requires the Prompt Enhancer enabled and set to a Qwen 3.5 variant; the Llama
+  3.2 and JoyCaption options are captioning models and will not follow the
+  instruction. The bridge borrows the enhancer WanGP already holds where it
+  can, and loads one at the configured level where it cannot, releasing it
+  afterwards. `ENHANCER_KEEP_LOADED` in `plugin.py` keeps a self-loaded copy
+  resident between presses, trading VRAM for speed.
+
+- **Voiceover beats.** A third beat type alongside action and dialogue, and the
+  only one that changes the output rather than labelling it. The spec fixes
+  both the clause and its follow-up, and both are now written:
+
+  > The man (S1) says in an off-screen voiceover: `<d>`[English] I still
+  > remember that road.`</d>` while his lips remain completely closed.
+
+  Anything in the delivery box is kept as a preceding action, with a trailing
+  "says" stripped so it cannot collide with the required phrase and produce
+  "says quietly and says in an off-screen voiceover". The pronoun comes from
+  the entry's voice gender, defaulting to "their"; several speakers sharing a
+  line take the plural verb, matching the guide's group-speech examples. A
+  speaker whose **Presence** is set to off-screen gets no lips clause, since
+  the guide's wording is about the on-screen character and there is no visible
+  face to describe.
+
+- **`<cutoff>`.** A per-beat checkbox for speech the clip ends in the middle
+  of. Without it the model treats the line as something that must complete
+  inside the duration, so it either rushes the delivery or lands on an
+  unnatural silence. Works on dialogue and voiceover alike, and is worth having
+  with sliding windows, where a line deliberately runs past the end of one
+  window and picks up in the next.
+
+- **On-screen text**, per shot. A carrier dropdown — sign, neon sign, banner,
+  subtitle, phone screen, licence plate, departure board and so on — and a text
+  field. The words are quoted verbatim in English double quotation marks and
+  never translated, per the guide's on-screen text rule. Quotes typed around
+  the text are stripped rather than doubled up.
+
+- **Clothing in the character creator.** A preset list plus free text, added
+  last so the sentence reads as a person first and an outfit second:
+
+  > John, an Asian male in his mid-40s, six feet tall with a muscular build,
+  > long straight black hair and brown eyes, wearing a rumpled trenchcoat.
+
+  Presets are phrased to follow "wearing", which the composer supplies;
+  anything typed that already carries its own verb ("dressed in a long evening
+  gown") is used as written. Clothing alone yields "A person, wearing a police
+  uniform."
+
+### Changed
+
+- **`<scenetrans>` is written at both connecting points.** The guide asks for
+  the tag on both halves of a line crossing a cut *and* for the continuity to
+  be stated in words; the builder emitted a bare tag on one side only, which is
+  half of it. The originating beat now carries the tag plus one of the guide's
+  three forward-looking phrases, chosen from a **How it carries** dropdown, and
+  the receiving shot writes its own matching half automatically. "Carries over
+  from the previous shot" is reserved for the receiving side and so is not
+  offered in the dropdown.
+- The music instruction sent to the enhancer follows guide §4.7:
+  instrumentation, speed, rhythm and dynamics, with mood words and
+  explanations of the score's emotional function ruled out.
+
+### Fixed
+
+- **Audio suggestions worked once and then never again.** The Qwen enhancers
+  reason before answering, and once the scene grew past a certain size the
+  reply was truncated mid-`<think>` — no closing tag, no JSON, nothing to
+  parse. Four changes: the token budget is up from 320 to 1024; thinking is
+  suppressed three ways (the keyword argument, the flag set on the model
+  object and restored after, and `/no_think` appended to the text, because a
+  model borrowed from the offload pipe carries the flag WanGP set at load time
+  rather than the one passed in); an unclosed reasoning block is now handled by
+  dropping everything from it onward; and a reply that parses to nothing
+  retries once with a blunter prompt that forbids reasoning outright.
+- **A well-formed reply that ignored the requested format parsed as nothing.**
+  An unlabelled answer is now read as one line for the soundscape, or two for
+  the soundscape and the score — guarded so that refusals and preamble are
+  rejected rather than written into the fields as sound design.
+- **Parse failures were opaque.** The full reply now goes to the console and
+  the first 300 characters are quoted in the panel, which is the difference
+  between diagnosing this and guessing at it.
+- **The enhancer was reported as not loaded when it plainly was.** It is
+  registered in mmgp's offload pipe under `prompt_enhancer_llm_model` — the
+  "Hooked to model" line in the console — rather than held in a `wgp.py`
+  global, which is where the first implementation looked. It is now found there
+  first, with the module global and an on-demand load as fallbacks, and the
+  status line ends with a probe report saying which routes were open.
+
+### Notes
+
+Two known limitations are retired: the voiceover clause the spec requires after
+`</d>` is emitted, and `_beat_text` now has a slot after the speech for it.
+
+The audio suggestion depends on WanGP internals that are not a documented API.
+Every step is probed and every failure surfaces as text in the panel rather
+than a traceback, but a WanGP update could still break it.
+
 ## [1.6.0] — 2026-08-13
 
 ### Fixed

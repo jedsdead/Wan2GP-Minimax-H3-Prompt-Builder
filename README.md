@@ -38,7 +38,9 @@ Wan2GP/plugins/wan2gp-h3-prompt-builder/
 ```
 
 Enable it in the plugin list and restart. No extra dependencies — the plugin
-only uses `re` and `gradio`.
+only uses `re` and `gradio`. The audio-suggestion button additionally talks to
+WanGP's own Prompt Enhancer, but that's already part of WanGP; nothing extra
+is installed for it.
 
 ---
 
@@ -48,7 +50,8 @@ only uses `re` and `gradio`.
 
 ```
 integrated_multimodal_description: A film noir scene, set in an office at night, lit by shafts of light through blinds, with a high-contrast black and white grade, shot on Super 35mm film, across a 10-second duration.
-[Shot 1] A medium shot on an 85mm portrait lens frames the detective at his desk. The camera pushes in. A private detective in a rumpled trenchcoat, a middle-aged male with a low, gravelly, measured voice (S1) sits back and says: <d>[English] She walked in like trouble.</d> At 00:05.000, (S1) turns to the window.
+[Shot 1] A medium shot on an 85mm portrait lens frames the detective at his desk. The camera pushes in. A neon sign reading "OPEN ALL NIGHT" is visible in the frame. A private detective in a rumpled trenchcoat, a middle-aged male with a low, gravelly, measured voice (S1) sits back and says: <d>[English] She walked in like trouble.</d><scenetrans> The speech continues seamlessly across the cut.
+[Shot 2] At 00:05.000, the camera cuts to a close-up of the rain-streaked window. <scenetrans>The speech carries over from the previous shot. (S1) watches the glass and says in an off-screen voiceover: <d>[English] I should have shown her the door.</d> while his lips remain completely closed.<cutoff>
 overall_soundscape: The scene carries rain on a tin roof.
 non_diegetic_music: A noir jazz score with muted trumpet and brushed drums.
 ```
@@ -143,22 +146,29 @@ entry becomes a `<Subject N>` definition, and the shot text refers to the label
 rather than repeating the description.
 
 Only the description is required. **Use character creator** reveals a small
-casting sheet - name, ethnicity, gender, age range, height, build, hairstyle,
-hair colour, eye colour - with an **Add to description** button that composes
-a sentence like:
+casting sheet — name, ethnicity, gender, age range, height, build, hairstyle,
+hair colour, eye colour, clothing — with an **Add to description** button that
+composes a sentence like:
 
 > John, an Asian male in his mid-40s, six feet tall with a muscular build,
-> long straight black hair and brown eyes.
+> long straight black hair and brown eyes, wearing a rumpled trenchcoat.
 
 Every field is optional; leave any of them blank and the grammar adjusts
-rather than leaving a gap. The button overwrites the Description field, so
-type there directly if you'd rather skip the creator. If a name is set, it
-also shows up next to the Subject number in every beat's **Who** dropdown -
-`Subject 1 (John)` - purely to help track several subjects; the prompt itself
-still reads `Subject N` / `(Sx)`.
+rather than leaving a gap. Clothing goes last, so the sentence reads as a
+person first and an outfit second — presets are phrased to follow "wearing",
+which the composer supplies, but anything you type that already carries its
+own verb ("dressed in a long evening gown") is used as written.
+
+The button overwrites the Description field, so type there directly if you'd
+rather skip the creator. If a name is set, it also shows up next to the Subject
+number in every beat's **Who** dropdown — `Subject 1 (John)` — purely to help
+track several subjects; the prompt itself still reads `Subject N` / `(Sx)`.
 
 **Speaker** is assigned by you, not derived from position: if entry 2 is a
 car and entry 3 talks, entry 3 can be S2.
+
+**Presence** matters for voiceover: a speaker marked off-screen gets no
+closed-lips clause, since there's no visible face to describe.
 
 Tick **Use reference mode (Ref2VA)** at the top of the panel to reveal the
 reference fields on every entry, along with the Reference task section. They
@@ -181,6 +191,13 @@ Framing, motion and rig are three separate axes: where the camera is, what it
 does, and how it's mounted. A dolly in is Push In on a dolly track; a 360 is an
 Arc Shot; a drone shot is any motion at all, on a drone.
 
+**Visible text** covers anything actually readable on screen — a sign, banner,
+subtitle, phone screen, licence plate. Pick what's carrying it and type the
+words; they're quoted verbatim in double quotation marks and never translated,
+which is what the guide asks for:
+
+> A neon sign reading "OPEN ALL NIGHT" is visible in the frame.
+
 ### Beats
 
 Within each shot, **Add beat** builds an ordered sequence. A beat is:
@@ -188,13 +205,35 @@ Within each shot, **Add beat** builds an ordered sequence. A beat is:
 - **unattributed** — leave **Who** blank: `A bus pulls away.`
 - **attributed action** — pick subjects, leave the speech blank
 - **dialogue** — subjects, their action and delivery, and the spoken words
+- **voiceover** — the same, but written with the phrasing the spec fixes
 
 Action and delivery go *outside* the `<d>` tag; only the language tag and the
 words go inside. Beats appear in the order you add them.
 
 Each beat takes an optional **At (seconds)**, timing an event inside the shot —
-`At 00:04.000, they clash in the centre.` Tick **carries across the next cut**
-to emit `<scenetrans>`.
+`At 00:04.000, they clash in the centre.`
+
+**Voiceover** is the one beat type that changes the output rather than just
+labelling it. The spec requires an exact clause and a specific follow-up, and
+both are written for you:
+
+> The man (S1) says in an off-screen voiceover: `<d>`[English] I still remember
+> that road.`</d>` while his lips remain completely closed.
+
+Anything in the delivery box is kept as a preceding action, with a trailing
+"says" dropped so it can't collide with the required phrase. The pronoun comes
+from the entry's voice gender; several speakers sharing a line take the plural
+verb.
+
+Two checkboxes handle audio that doesn't respect shot boundaries:
+
+- **Line carries across the next cut** writes `<scenetrans>` on both sides of
+  the cut and states the continuity in words. **How it carries** picks the
+  wording for the outgoing half from the guide's sanctioned phrases; the
+  receiving shot's matching line is written automatically.
+- **Speech runs past the end** writes `<cutoff>`, telling the model the clip
+  ends mid-line rather than waiting for the speaker to finish. Useful with
+  sliding windows, where a line deliberately continues into the next one.
 
 ### Audio
 
@@ -207,6 +246,9 @@ Two fields, and which one a sound belongs in depends on a single question:
 Music playing on-screen is diegetic and belongs in a beat. Both fields have
 preset dropdowns — the music presets lead with score genres and screen-music
 styles — and a free-text box for anything else.
+
+**Suggest soundscape and music from the scene** hands what you've built to
+WanGP's own Prompt Enhancer and has it write both. See below.
 
 In reference mode each gains an audio reference beneath it with its own
 retention marker; the music reference also names what it controls (style, beat
@@ -223,6 +265,40 @@ A reference-mode section, sitting just above the Insert button and hidden when
 the switch is off — base modes have no summary field. **Draft summary from
 fields** produces a first pass you can edit. The `[task type]` prefix is added
 when the prompt is built, so it won't appear in the box itself.
+
+---
+
+## Suggesting the audio
+
+The button in the Audio section reads what you've entered and asks WanGP's
+Prompt Enhancer what the scene should sound like. It writes the two custom text
+boxes and leaves the preset dropdowns alone, so a suggestion is always undone
+by clearing one field.
+
+**What it reads.** For the soundscape: location, atmosphere, style, every shot
+anchor, and the action in every beat, plus whatever soundscape presets and
+notes you've already set. For the music: style, music presets and music notes.
+Where you've already chosen something it's told to build on it and fill the
+gaps rather than restate it; where you haven't, it works it out from the scene.
+
+**What it deliberately doesn't read.** Camera work — framing, lens, motion,
+rig. None of it says anything about sound, and feeding it in pulls the model
+towards describing the shot instead. Dialogue is reported as *"someone speaks
+aloud here"* without the words, so there's nothing for it to echo back into a
+field that must not contain any.
+
+**Requirements.** The Prompt Enhancer must be enabled in the Configuration tab
+and set to one of the Qwen 3.5 variants — the Llama 3.2 and JoyCaption options
+are captioning models and won't follow the instruction. The button borrows the
+enhancer WanGP already holds where it can, and loads one at your configured
+level where it can't, releasing it afterwards. Set `ENHANCER_KEEP_LOADED` in
+`plugin.py` to keep it resident between presses if you'd rather trade VRAM for
+speed.
+
+**When it fails.** The status line ends with a probe report saying what it
+could and couldn't find, and a reply that won't parse is printed in full to the
+console and quoted in the panel. Read the suggestion before building — it's a
+first pass, not a finished field.
 
 ---
 
@@ -269,12 +345,16 @@ not additions. The plugin warns if you describe both.
 
 Vocabulary lists are plain Python lists at the top of `plugin.py` —
 `LOCATIONS`, `SCENE_LIGHTING`, `MOTION_TYPES`, `RIGS`, `SOUNDSCAPE_PRESETS`,
-`MUSIC_PRESETS` and so on. Edit freely, but keep entries phrased to read
-naturally mid-sentence.
+`MUSIC_PRESETS`, `CHAR_CLOTHING`, `SCREEN_TEXT_KINDS`, `CARRY_PHRASES` and so
+on. Edit freely, but keep entries phrased to read naturally mid-sentence.
 
 `MAX_SHOTS`, `MAX_BEATS` and `MAX_ENTRIES` set the ceilings. Slots are
 pre-created and hidden rather than built on demand, so raising them adds
 components at load time.
+
+The audio suggestion's instruction is `AUDIO_SYSTEM_PROMPT` near the top of
+`plugin.py`, with `AUDIO_RETRY_PROMPT` used as a blunter second pass when the
+first reply won't parse.
 
 ---
 
@@ -287,15 +367,17 @@ components at load time.
 - The panel hides on model change. If WanGP starts with a non-MiniMax model
   already selected, it may stay visible until you switch models once.
 - Slot numbers aren't checked against what's actually loaded in the generator.
-- Voiceover has required phrasing in the spec, including a follow-up clause
-  about the speaker's lips, which isn't generated yet.
 - There's no way to keep a source video's spoken words while replacing the
   voice.
+- One piece of on-screen text per shot.
+- `<scenetrans>` assumes the line carries into the *next* shot. A line spanning
+  more than one cut needs editing by hand.
 - Interface labels read "Subject 1", "Subject 2" in the cast list and the beat
   **Who** dropdown whatever the mode. They're row identifiers, not output
   labels — in base modes the word never reaches the prompt.
-- The voiceover clause the spec requires after `</d>` ("while his lips remain
-  completely closed") can't be emitted; there's no field after the speech.
+- The audio suggestion depends on WanGP internals that aren't a documented API.
+  It degrades to a message in the panel rather than an error, but a WanGP
+  update could still break it.
 
 ---
 

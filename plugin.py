@@ -52,8 +52,6 @@ import gc
 import json
 import re
 import sys
-import time
-from pathlib import Path
 
 import gradio as gr
 
@@ -100,6 +98,25 @@ ENHANCER_CAPABLE_LEVELS = (3, 4)
 # Where the enhancer's language model is registered in the offload pipe.
 ENHANCER_PIPE_KEY = "prompt_enhancer_llm_model"
 
+AUDIO_SYSTEM_PROMPT = """You are a supervising sound editor. You will be given three blocks: SCENE, SOUNDSCAPE DIRECTION and SCORE DIRECTION.
+
+Write two things.
+
+soundscape - the diegetic sound bed, meaning everything a microphone standing in that scene would pick up: room tone, weather, surfaces, machinery, footsteps, cloth, breath, crowd. Base it on the SCENE block and on SOUNDSCAPE DIRECTION only. Where direction is already given, build on it and fill the gaps around it rather than restating it or contradicting it. Where none is given, work it out from the setting, the atmosphere and what happens.
+
+music - the non-diegetic score, meaning the instrumentation, speed, rhythm and changes in volume of music only the audience hears. Base it on the SCORE DIRECTION block. Where a style or a choice is already given, develop it into specific instrumentation and tempo. Where none is given, work out a score that suits the scene as described. If the scene plainly wants no score, write exactly: none
+
+Rules:
+- Do not transcribe or invent dialogue. Spoken words are handled elsewhere.
+- Music the characters can hear on screen is handled elsewhere. Leave it out of both fields.
+- Say nothing about camera, framing, lens, movement, colour, editing or performance.
+- For music, name instruments, tempo, rhythm and dynamics. Do not use mood words and do not explain what the score does for the audience emotionally. Write "sparse piano at a slow tempo, joined by sustained low strings that swell and fade", not "a tense, melancholy piano theme".
+- One or two sentences each, present tense, no line breaks.
+- Use only what the blocks support. Do not add locations, objects or events that are not in them.
+
+Return only this JSON object and nothing else:
+{"soundscape": "...", "music": "..."}"""
+
 # Used only when the first reply parses to nothing. Shorter, blunter, and it
 # forgoes the reasoning that caused the truncation in the first place.
 AUDIO_RETRY_PROMPT = """Read the scene below and answer with one JSON object and nothing else. No preamble, no explanation, no reasoning.
@@ -107,39 +124,6 @@ AUDIO_RETRY_PROMPT = """Read the scene below and answer with one JSON object and
 {"soundscape": "<one sentence of diegetic sound: ambience, surfaces, weather, footsteps, breath>", "music": "<one sentence naming instruments, tempo and rhythm for the score, or the single word none>"}
 
 No dialogue. No camera. No mood words in the music."""
-
-# Asking for one field at a time. The combined prompt has to hold two jobs in
-# mind at once, and the weaker enhancers drift between them - a score note
-# turning up in the soundscape, or the reverse. One field per call costs a
-# second press and reliably gets an answer about the thing that was asked.
-SOUNDSCAPE_ONLY_PROMPT = """You are a supervising sound editor. You will be given three blocks: SCENE, SOUNDSCAPE DIRECTION and SCORE DIRECTION.
-
-Write one thing only: the soundscape - the diegetic sound bed, meaning everything a microphone standing in that scene would pick up: room tone, weather, surfaces, machinery, footsteps, cloth, breath, crowd. Base it on the SCENE block and on SOUNDSCAPE DIRECTION only. Where direction is already given, build on it and fill the gaps around it rather than restating it or contradicting it. Where none is given, work it out from the setting, the atmosphere and what happens.
-
-Rules:
-- Do not transcribe or invent dialogue. Spoken words are handled elsewhere.
-- Say nothing about the score. Non-diegetic music is handled elsewhere, and the SCORE DIRECTION block is context only.
-- Music the characters can hear on screen is handled elsewhere. Leave it out.
-- Say nothing about camera, framing, lens, movement, colour, editing or performance.
-- One or two sentences, present tense, no line breaks.
-- Use only what the blocks support. Do not add locations, objects or events that are not in them.
-
-Return only this JSON object and nothing else:
-{"soundscape": "..."}"""
-
-MUSIC_ONLY_PROMPT = """You are a film composer. You will be given three blocks: SCENE, SOUNDSCAPE DIRECTION and SCORE DIRECTION.
-
-Write one thing only: the music - the non-diegetic score, meaning the instrumentation, speed, rhythm and changes in volume of music only the audience hears. Base it on the SCORE DIRECTION block, using SCENE for context. Where a style or a choice is already given, develop it into specific instrumentation and tempo. Where none is given, work out a score that suits the scene as described. If the scene plainly wants no score, write exactly: none
-
-Rules:
-- Do not transcribe or invent dialogue.
-- Say nothing about diegetic sound - ambience, weather and footsteps are handled elsewhere.
-- Music the characters can hear on screen is handled elsewhere. Leave it out.
-- Name instruments, tempo, rhythm and dynamics. Do not use mood words and do not explain what the score does for the audience emotionally. Write "sparse piano at a slow tempo, joined by sustained low strings that swell and fade", not "a tense, melancholy piano theme".
-- One or two sentences, present tense, no line breaks.
-
-Return only this JSON object and nothing else:
-{"music": "..."}"""
 
 _ENH_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
 _ENH_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
@@ -152,48 +136,6 @@ _ENH_LABEL_RE = re.compile(
 
 # Our own copy, if we ended up loading one.
 _ENHANCER_OWNED = {"model": None, "tokenizer": None}
-
-# -- the action field -------------------------------------------------------
-#
-# Shot markers are the spine of the field: numbering, camera continuation,
-# retention scope and validation all read them back rather than trusting a
-# counter, so deleting a shot by hand stays correct.
-_ACTION_SHOT_RE = re.compile(r"\[Shot\s+(\d+)\]", re.I)
-_ACTION_CAMERA_RE = re.compile(r"\bthe camera\b", re.I)
-
-# Whether a shot already has a camera sentence in it. "The camera" alone is
-# not enough: the opening shot takes no transition verb, so its camera
-# sentence leads with the framing instead and never names the camera at all.
-# Matched against the shot with its [Shot N] marker removed, or every tail
-# would match on the word "Shot".
-_ACTION_FRAMING_RE = re.compile(
-    r"\b(?:shot|close-?up|cutaway|view|frame holds|the frame)\b", re.I)
-_ACTION_SPEAKER_RE = re.compile(r"\((S\d+(?:\s*,\s*S\d+)*)\)")
-_ACTION_TRAILING_ID_RE = re.compile(r"\s*\(S\d+(?:\s*,\s*S\d+)*\)\s*$")
-_ACTION_TRANS_RE = re.compile(r"<scenetrans>")
-_ACTION_RECEIVE_RE = re.compile(r"<scenetrans>\s*The speech carries over", re.I)
-_ACTION_TIME_RE = re.compile(r"\bAt\s+(\d{2}):(\d{2}\.\d{3})")
-
-# A timestamp the buttons would never write, so it escapes both the ordering
-# check and the duration check. "At 3s," and "At 00:03," are the common ones.
-_ACTION_LOOSE_TIME_RE = re.compile(r"\bAt\s+(?!\d{2}:\d{2}\.\d{3})(\d[^,\n]{0,15}),")
-
-# Dialogue tags, walked left to right rather than counted, so an interleaved
-# pair is caught as well as an unbalanced one.
-_ACTION_D_TAG_RE = re.compile(r"</?d>")
-_ACTION_D_BLOCK_RE = re.compile(r"<d>(.*?)</d>", re.S)
-_ACTION_D_LANG_RE = re.compile(r"^\s*\[[^\]\n]+\]")
-
-# Continuity prose and the closed-lips clause, which the audio digest strips.
-# Both describe how a cut or a mouth behaves rather than how anything sounds,
-# and neither is a sentence of its own - they hang off a tag or a </d>.
-_ACTION_CARRY_SENTENCE_RE = re.compile(r"<scenetrans>\s*The speech[^.]*\.", re.I)
-_ACTION_LIPS_RE = re.compile(
-    r"\s*while (?:his|her|their|its) lips remain[^.]*\.", re.I)
-
-# The receiving half a Shot press writes, used when the action is cleared
-# for a new sliding window and a carried line was still open.
-CARRY_RECEIVE_TEXT = "The speech carries over from the previous shot."
 
 
 class EnhancerUnavailable(Exception):
@@ -465,20 +407,13 @@ def _get_enhancer():
 
 
 def _run_enhancer(system_prompt, user_text,
-                  max_new_tokens=ENHANCER_MAX_NEW_TOKENS,
-                  keep_loaded=None):
+                  max_new_tokens=ENHANCER_MAX_NEW_TOKENS):
     """
     One text-only completion through the Prompt Enhancer, with our own system
     prompt in place of its cinematic one.
 
-    keep_loaded overrides the ENHANCER_KEEP_LOADED default for this call, so
-    the checkbox in the UI can decide per press. It only governs a copy we
-    loaded ourselves - a borrowed enhancer is WanGP's to release.
-
     Returns (text, source) on success or (None, reason) on failure.
     """
-    if keep_loaded is None:
-        keep_loaded = ENHANCER_KEEP_LOADED
     try:
         model, tokenizer, source = _get_enhancer()
     except EnhancerUnavailable as exc:
@@ -491,7 +426,7 @@ def _run_enhancer(system_prompt, user_text,
             generate_cinematic_prompt,
         )
     except Exception as exc:
-        if not keep_loaded:
+        if not ENHANCER_KEEP_LOADED:
             _release_our_own()
         return None, f"could not reach the Prompt Enhancer ({exc})"
 
@@ -540,7 +475,7 @@ def _run_enhancer(system_prompt, user_text,
             setattr(model, thinking_attr, had_thinking)
         except Exception:
             pass
-    if not keep_loaded:
+    if not ENHANCER_KEEP_LOADED:
         _release_our_own()
 
     if error:
@@ -632,20 +567,8 @@ def _parse_audio_reply(raw):
 
 MAX_ENTRIES = 8      # cast and subjects are one list
 MAX_SPEAKERS = 6     # how many speaker slots the Speaker dropdown offers
-
-# Visibility updates _clear and _restore_draft return after the field values:
-# one per cast entry, one per entry's reference block, then the two audio
-# reference blocks and the summary block.
-CLEAR_GROUP_UPDATES = MAX_ENTRIES * 2 + 3
-
-# How often the form is written to disk while you work, in seconds. Only
-# used when the installed Gradio has gr.Timer; otherwise the draft is saved
-# on every button press instead.
-AUTOSAVE_SECONDS = 20
-
-# The last payload written, so an idle timer costs a comparison rather than
-# a file write and a UI update.
-_DRAFT_CACHE = {"values": None}
+MAX_SHOTS = 6
+MAX_BEATS = 5
 
 # Substrings that mark a model as MiniMax H3. Checked case-insensitively
 # against the model type reported by on_model_change.
@@ -682,19 +605,32 @@ EXAMPLE_ENTRY_FALLBACK = {
     "shots": "1, 2",
 }
 
-# The worked example, now that the action lives in one field. Same fishmonger
-# as the rest of the placeholders, written the way the buttons would write it.
-EXAMPLE_ACTION = (
-    "[Shot 1] The camera cuts to a medium shot of the fishmonger behind the "
-    "counter, a whole fish laid on the ice, on a 35mm lens. A chalkboard "
-    'reading "TODAY: SEA BASS" is visible in the frame. (S1) lifts the fish '
-    "onto the board and says: <d>[English] This one came off the boat this "
-    "morning.</d> At 00:03.000, (S1) sets the blade against the belly and "
-    "steadies the fish.\n"
-    "[Shot 2] At 00:05.000, the camera cuts to a close-up of his hands and "
-    "the board, on a 50mm macro lens. (S1) draws the knife along the spine "
-    "in one unbroken movement."
-)
+EXAMPLE_SHOTS = [
+    {
+        "anchor": "the fishmonger behind the counter, a whole fish laid on the ice, a steel knife within reach",
+        "beats": [
+            {"action": "lifts the fish onto the board and says",
+             "speech": "This one came off the boat this morning."},
+            {"action": "sets the blade against the belly and steadies the fish",
+             "speech": ""},
+        ],
+    },
+    {
+        "anchor": "his hands and the board, the fish opened along the belly",
+        "beats": [
+            {"action": "draws the knife along the spine in one unbroken movement",
+             "speech": ""},
+            {"action": "glances up and adds",
+             "speech": "Cleanest fish you will get all week."},
+        ],
+    },
+]
+
+EXAMPLE_SHOT_FALLBACK = {
+    "anchor": "what is in frame when this shot opens",
+    "beats": [{"action": "what happens in this beat",
+               "speech": "anything spoken, without quote marks"}],
+}
 
 
 # Keyframe images are attached in the generator; the checkboxes only decide
@@ -820,18 +756,6 @@ CUT_VERBS = [
     "the shot cross-dissolves to", "the shot dissolves to",
     "the shot fades to", "the shot wipes to", "the shot whip-pans to",
     "the shot irises to", "the shot cuts away to",
-]
-
-# Used when the camera changes within a shot rather than at a cut. The
-# insert button picks from these instead of CUT_VERBS when a camera sentence
-# has already been written since the last [Shot N].
-CONTINUE_VERBS = [
-    "the camera moves to",
-    "the camera continues into",
-    "the camera reframes to",
-    "the camera settles into",
-    "the camera drifts to",
-    "the camera swings round to",
 ]
 
 LANGUAGES = [
@@ -1003,32 +927,22 @@ TASK_TYPES = ["keyframe completion", "reference generation", "video editing",
 # all visual description inside integrated_multimodal_description.
 
 LOCATIONS = [
-    "a rain-slicked alley behind a nightclub", "a farmhouse kitchen",
+    "a rain-slicked alley behind a nightclub", "a farmhouse kitchen at dawn",
     "an airport departure lounge", "a lighthouse gallery in a storm",
     "a disused swimming pool", "a rooftop garden above the city",
-    "an antique shop crowded with clocks", "a motorway service station",
+    "an antique shop crowded with clocks", "a motorway service station at night",
     "a boat deck on open water", "a stone chapel lit by candles",
-    "a launderette", "a records archive in a basement",
-    "a ski lift above treeline", "a bustling New York street",
-    "a covered market hall", "a tiled underpass",
+    "a launderette at closing time", "a records archive in a basement",
+    "a ski lift above treeline", "a bustling New York street at dusk",
+    "a covered market hall", "a late-night launderette", "a tiled underpass",
     "a rain-soaked city street", "a suburban kitchen", "a hotel corridor",
     "a crowded subway platform", "a quiet library reading room",
-    "an empty car park", "a coastal fishing dock",
-    "a pine forest clearing", "a desert highway", "a rooftop",
+    "an empty car park at night", "a coastal fishing dock",
+    "a pine forest clearing", "a desert highway", "a rooftop at dusk",
     "a hospital waiting room", "a school classroom", "a dive bar",
-    "an office", "a country lane", "a snowbound cabin",
+    "an office at night", "a country lane", "a snowbound cabin",
     "a train carriage", "a cathedral interior", "a warehouse floor",
-    "a greenhouse", "a mountain ridge", "a riverbank",
-]
-
-# Time of day sits apart from lighting: lighting is how the scene is lit,
-# this is when it happens. It reaches the opening sentence and the audio
-# digest, where dawn and midnight imply very different sound.
-TIMES_OF_DAY = [
-    "", "at dawn", "in the early morning", "in the morning", "at midday",
-    "in the afternoon", "in the late afternoon", "at golden hour",
-    "at sunset", "at dusk", "in the evening", "at night", "late at night",
-    "at midnight", "in the small hours",
+    "a greenhouse", "a mountain ridge", "a riverbank at dawn",
 ]
 
 SCENE_LIGHTING = [
@@ -1224,7 +1138,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         below: insert_after does parent.children.pop(-1) and assumes the
         constructor added exactly one top-level child.
         """
-        entries, char_names = [], []
+        entries, shots, char_names = [], [], []
 
         def dd(choices, label, **kw):
             return gr.Dropdown(choices, label=label, value="",
@@ -1245,61 +1159,33 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             model_warning = gr.Markdown(visible=False)
 
-            # Kept at the top and outside every accordion: after a crash this
-            # is the first thing wanted, and it should not be behind a fold.
+            gr.Markdown(KEYFRAME_NOTE)
+
             with gr.Row():
-                restore_draft_btn = gr.Button("Restore last draft", size="sm")
-                save_draft_btn = gr.Button("Save draft now", size="sm")
-                clear_top_btn = gr.Button("Clear all fields", size="sm")
-            draft_status = gr.Markdown(self._draft_note())
+                start_image = gr.Checkbox(label="Start image", value=False)
+                end_image = gr.Checkbox(label="End image", value=False)
 
-            # Every section below is an accordion so a long form can be
-            # folded down to the part being worked on. Open states here are
-            # only the defaults - Gradio remembers nothing between sessions,
-            # so they are set to what a first build needs rather than to
-            # what is used most.
-            with gr.Accordion("Mode & keyframes", open=True):
-                gr.Markdown(KEYFRAME_NOTE)
+            ref_mode = gr.Checkbox(
+                label="Use reference mode (Ref2VA)",
+                value=False,
+                info="Reveals reference subjects, the source video and the "
+                     "task type. Leave unticked and none of it is written.",
+            )
 
-                with gr.Row():
-                    start_image = gr.Checkbox(label="Start image", value=False)
-                    end_image = gr.Checkbox(label="End image", value=False)
+            with gr.Row():
+                duration = gr.Number(label="Duration of this window (seconds)",
+                                     value=8.0,
+                                     minimum=0.5, step=0.5)
+                style = dd(STYLES, "Style")
+                grading = dd(GRADING, "Colour grade")
 
-                ref_mode = gr.Checkbox(
-                    label="Use reference mode (Ref2VA)",
-                    value=False,
-                    info="Reveals reference subjects, the source video and "
-                         "the task type. Leave unticked and none of it is "
-                         "written.",
-                )
+            with gr.Row():
+                location = dd(LOCATIONS, "Location")
+                lighting = dd(SCENE_LIGHTING, "Lighting")
+                atmosphere = dd(SCENE_ATMOSPHERE, "Atmosphere")
 
-            with gr.Accordion("Scene", open=True):
-                gr.Markdown(
-                    "What holds for the whole clip. These become the single "
-                    "opening sentence before `[Shot 1]`. Lens and rig are "
-                    "not here - they belong to the camera button in Action, "
-                    "since both commonly change at a cut."
-                )
-                with gr.Row():
-                    duration = gr.Number(
-                        label="Duration of this window (seconds)",
-                        value=8.0, minimum=0.5, step=0.5)
-                    style = dd(STYLES, "Style")
-                    grading = dd(GRADING, "Colour grade")
-
-                with gr.Row():
-                    location = dd(LOCATIONS, "Location")
-                    # Location presets used to carry their own "at dawn"
-                    # tails. They are stripped now that the hour is its own
-                    # field, so picking both cannot produce "a rooftop at
-                    # dusk at night".
-                    time_of_day = dd(TIMES_OF_DAY, "Time of day")
-                with gr.Row():
-                    lighting = dd(SCENE_LIGHTING, "Lighting")
-                    atmosphere = dd(SCENE_ATMOSPHERE, "Atmosphere")
-
-                with gr.Row():
-                    camera_type = dd(CAMERA_TYPES, "Camera / stock")
+            with gr.Row():
+                camera_type = dd(CAMERA_TYPES, "Camera / stock")
 
             # ---- source video (FL2VA continue / Ref2VA video reference) ----
             # ---- cast and subjects (one list) ------------------------------
@@ -1320,10 +1206,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 for i in range(MAX_ENTRIES):
                     ex = (EXAMPLE_ENTRIES[i] if i < len(EXAMPLE_ENTRIES)
                           else EXAMPLE_ENTRY_FALLBACK)
-                    # One accordion per entry: eight open at once is most of
-                    # a screen, and only the one being edited needs to be.
-                    with gr.Accordion(f"Subject {i + 1}", open=True,
-                                      visible=False) as grp:
+                    with gr.Group(visible=False) as grp:
+                        gr.Markdown(f"**Subject {i + 1}**")
                         e_use_creator = gr.Checkbox(
                             label="Use character creator", value=False,
                         )
@@ -1409,10 +1293,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                     label="What is retained",
                                     placeholder=ex["note"],
                                 )
-                                # "Appears in shots" used to be typed here.
-                                # It is read out of the action by speaker ID
-                                # now, so it cannot go stale when a shot is
-                                # renumbered or deleted by hand.
+                                e_shots = gr.Textbox(label="Appears in shots",
+                                                     placeholder=ex["shots"])
                             with gr.Row():
                                 e_voice_from = gr.Dropdown(
                                     REF_AUDIO_SLOTS, label="Voice from",
@@ -1448,7 +1330,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         "lang": e_lang,
                         "ref_block": e_ref_block,
                         "source": e_source, "retention": e_retention,
-                        "note": e_note,
+                        "note": e_note, "shots": e_shots,
                         "voice_from": e_voice_from,
                         "motion_from": e_motion_from,
                     })
@@ -1510,114 +1392,179 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         )
 
 
-            with gr.Accordion("Action", open=True):
+            with gr.Accordion("Shots", open=True):
+                shot_count = gr.State(1)
                 gr.Markdown(
-                    "Write the action here. The buttons insert labels, "
-                    "timestamps, camera sentences and dialogue in the format "
-                    "H3 expects - everything they write is ordinary text you "
-                    "can edit afterwards.\n\n"
-                    "**Shot** starts a new line; everything else is appended "
-                    "to the line you are on, so build a shot left to right "
-                    "and then tidy it up."
+                    "Shot 1 opens the clip and takes no cut time. If you are "
+                    "working from a start and an end image, a single shot "
+                    "usually works best so the model can interpolate between "
+                    "them."
                 )
-                action_text = gr.Textbox(
-                    label="Action", lines=14, max_lines=40,
-                    placeholder=EXAMPLE_ACTION,
-                )
-                # Holds the field as it was before the last insert, so Undo
-                # needs no history and cannot drift out of step with the text.
-                action_prev = gr.State("")
-                action_status = gr.Markdown("")
+
+                for si in range(MAX_SHOTS):
+                    shot_ex = (EXAMPLE_SHOTS[si] if si < len(EXAMPLE_SHOTS)
+                               else EXAMPLE_SHOT_FALLBACK)
+                    with gr.Group(visible=(si == 0)) as sgrp:
+                        gr.Markdown(f"**Shot {si + 1}**")
+                        with gr.Row():
+                            if si == 0:
+                                sh_cut = gr.Textbox(
+                                    label="Cut time", value="opening",
+                                    interactive=False,
+                                )
+                                sh_cutverb = gr.Textbox(
+                                    label="Transition", value="-",
+                                    interactive=False,
+                                )
+                            else:
+                                sh_cut = gr.Number(label="Cut at (seconds)",
+                                                   value=None, minimum=0, step=0.5)
+                                sh_cutverb = locked_dd(CUT_VERBS, "Transition")
+                            sh_framing = dd(FRAMINGS, "Framing")
+                            sh_lens = dd(LENS_TYPES, "Lens")
+                        with gr.Row():
+                            sh_motion = locked_dd(MOTION_TYPES, "Camera motion")
+                            sh_ampl = locked_dd(AMPLITUDES, "Amplitude")
+                            sh_speed = locked_dd(SPEEDS, "Speed")
+                            sh_rig = dd(RIGS, "Rig")
+                        sh_anchor = gr.Textbox(
+                            label="Anchor - composition and what is in frame",
+                            placeholder=shot_ex["anchor"],
+                        )
+
+                        with gr.Row():
+                            sh_screen_kind = gr.Dropdown(
+                                [""] + SCREEN_TEXT_KINDS,
+                                label="Visible text is on", value="",
+                                allow_custom_value=True,
+                            )
+                            sh_screen_text = gr.Textbox(
+                                label="Visible text",
+                                placeholder="OPEN",
+                                info="Words actually readable on screen. "
+                                     "Written verbatim inside double quotes, "
+                                     "never translated",
+                            )
+
+                        beats = []
+                        beat_count = gr.State(0)
+                        for bi in range(MAX_BEATS):
+                            beat_ex = (shot_ex["beats"][bi]
+                                       if bi < len(shot_ex["beats"])
+                                       else EXAMPLE_SHOT_FALLBACK["beats"][0])
+                            with gr.Group(visible=False) as bgrp:
+                                with gr.Row():
+                                    b_type = gr.Dropdown(
+                                        ["action", "dialogue", "voiceover"],
+                                        label="Type", value="action",
+                                        info="action and dialogue are labels "
+                                             "- a beat becomes dialogue when "
+                                             "it has spoken words. voiceover "
+                                             "changes the output: it writes "
+                                             "the spec's required phrasing "
+                                             "and the closed-lips clause",
+                                    )
+                                    b_speaker = gr.Dropdown(
+                                        [(f"Subject {n + 1}", f"Subject {n + 1}")
+                                         for n in range(MAX_ENTRIES)],
+                                        label="Who", value=[],
+                                        multiselect=True,
+                                        info="Speaker IDs are added "
+                                             "automatically where they apply. "
+                                             "Names shown here are just a "
+                                             "memory aid - the prompt still "
+                                             "uses Subject N / (Sx).",
+                                    )
+                                    b_lang = gr.Dropdown(
+                                        [""] + LANGUAGES,
+                                        label="Language override",
+                                        value="", allow_custom_value=True,
+                                        info="Blank uses the speaker's language",
+                                    )
+                                b_action = gr.Textbox(
+                                    label="Action / delivery (outside <d>)",
+                                    placeholder=beat_ex["action"],
+                                )
+                                b_speech = gr.Textbox(
+                                    label="Spoken words (inside <d>) - leave blank for non-verbal",
+                                    placeholder=beat_ex["speech"],
+                                )
+                                with gr.Row():
+                                    b_at = gr.Number(
+                                        label="At (seconds, optional)",
+                                        value=None, minimum=0, step=0.5,
+                                        info="When this beat happens. A shot "
+                                             "cutting at 4s can have its first "
+                                             "beat at 4.5s",
+                                    )
+                                    b_carries = gr.Checkbox(
+                                        label="Line carries across the next cut",
+                                        value=False,
+                                    )
+                                    b_carry_phrase = gr.Dropdown(
+                                        CARRY_PHRASES, label="How it carries",
+                                        value=CARRY_PHRASES[0],
+                                        allow_custom_value=True,
+                                        info="Only used when the box above "
+                                             "is ticked. The next shot's "
+                                             "matching line is written for "
+                                             "you",
+                                    )
+                                    b_cutoff = gr.Checkbox(
+                                        label="Speech runs past the end",
+                                        value=False,
+                                        info="Writes <cutoff> - the clip ends "
+                                             "mid-line rather than waiting "
+                                             "for the speaker to finish",
+                                    )
+                            beats.append({
+                                "group": bgrp, "type": b_type,
+                                "speaker": b_speaker, "lang": b_lang,
+                                "action": b_action, "speech": b_speech,
+                                "at": b_at, "carries": b_carries,
+                                "cutoff": b_cutoff,
+                                "carry_phrase": b_carry_phrase,
+                            })
+
+                        with gr.Row():
+                            add_beat = gr.Button("Add beat", size="sm")
+                            rm_beat = gr.Button("Remove last beat", size="sm")
+
+                        _beat_out = [beat_count] + [b["group"] for b in beats]
+                        add_beat.click(
+                            fn=lambda n: self._step_count(n, +1, MAX_BEATS),
+                            inputs=[beat_count], outputs=_beat_out,
+                        )
+                        rm_beat.click(
+                            fn=lambda n: self._step_count(n, -1, MAX_BEATS),
+                            inputs=[beat_count], outputs=_beat_out,
+                        )
+
+                    shots.append({
+                        "group": sgrp, "cut": sh_cut, "cutverb": sh_cutverb,
+                        "framing": sh_framing, "lens": sh_lens,
+                        "motion": sh_motion, "rig": sh_rig,
+                        "ampl": sh_ampl, "speed": sh_speed,
+                        "anchor": sh_anchor,
+                        "screen_kind": sh_screen_kind,
+                        "screen_text": sh_screen_text,
+                        "beat_count": beat_count,
+                        "beats": beats,
+                    })
 
                 with gr.Row():
-                    ins_shot = gr.Button("Shot", size="sm", variant="primary")
-                    at_seconds = gr.Number(
-                        label="At (seconds)", value=None, minimum=0, step=0.5,
-                    )
-                    ins_time = gr.Button("Time", size="sm")
+                    add_shot = gr.Button("Add shot", size="sm")
+                    rm_shot = gr.Button("Remove last shot", size="sm")
 
-                with gr.Accordion("Camera", open=True):
-                    with gr.Row():
-                        cam_verb = gr.Dropdown(
-                            [""] + CUT_VERBS + CONTINUE_VERBS,
-                            label="Transition", value="",
-                            allow_custom_value=True,
-                            info="Leave blank and it picks 'cuts to' for a "
-                                 "new shot, 'moves to' within one",
-                        )
-                        cam_framing = dd(FRAMINGS, "Framing")
-                        cam_lens = dd(LENS_TYPES, "Lens")
-                    with gr.Row():
-                        cam_motion = locked_dd(MOTION_TYPES, "Camera motion")
-                        cam_ampl = locked_dd(AMPLITUDES, "Amplitude")
-                        cam_speed = locked_dd(SPEEDS, "Speed")
-                        cam_rig = dd(RIGS, "Rig")
-                    cam_anchor = gr.Textbox(
-                        label="Of - what is in frame",
-                        placeholder="the fishmonger behind the counter, a "
-                                    "whole fish laid on the ice",
-                        info="Goes in the middle of the sentence, where the "
-                             "grammar wants it. Leave blank for a camera "
-                             "sentence that stands on its own",
-                    )
-                    ins_camera = gr.Button("Add camera", size="sm")
-
-                with gr.Accordion("Dialogue", open=True):
-                    with gr.Row():
-                        dl_who = gr.CheckboxGroup(
-                            [f"Subject {n + 1}" for n in range(MAX_ENTRIES)],
-                            label="Who", value=[],
-                        )
-                    with gr.Row():
-                        dl_type = gr.Dropdown(
-                            ["dialogue", "voiceover"], label="Type",
-                            value="dialogue",
-                            info="voiceover writes the spec's required "
-                                 "phrasing and the closed-lips clause",
-                        )
-                        dl_lang = dd(LANGUAGES, "Language")
-                    dl_delivery = gr.Textbox(
-                        label="Action and delivery",
-                        placeholder="lifts the fish onto the board and says",
-                        info="Goes outside the <d> tag. For a voiceover a "
-                             "trailing 'says' is dropped, since the spec "
-                             "fixes that wording",
-                    )
-                    dl_speech = gr.Textbox(
-                        label="Spoken words",
-                        placeholder="This one came off the boat this morning.",
-                    )
-                    with gr.Row():
-                        dl_carries = gr.Checkbox(
-                            label="Line carries across the next cut",
-                            value=False,
-                        )
-                        dl_carry_phrase = gr.Dropdown(
-                            CARRY_PHRASES, label="How it carries",
-                            value=CARRY_PHRASES[0], allow_custom_value=True,
-                            info="The next Shot writes its matching half",
-                        )
-                        dl_cutoff = gr.Checkbox(
-                            label="Speech runs past the end", value=False,
-                            info="Writes <cutoff>",
-                        )
-                    ins_dialogue = gr.Button("Add dialogue", size="sm")
-
-                with gr.Accordion("Visible text", open=False):
-                    with gr.Row():
-                        st_kind = gr.Dropdown(
-                            [""] + SCREEN_TEXT_KINDS,
-                            label="Visible text is on", value="",
-                            allow_custom_value=True,
-                        )
-                        st_text = gr.Textbox(
-                            label="Visible text", placeholder="TODAY: SEA BASS",
-                            info="Quoted verbatim, never translated",
-                        )
-                    ins_screen = gr.Button("Add visible text", size="sm")
-
-                with gr.Row():
-                    undo_action = gr.Button("Undo last insert", size="sm")
+                _shot_out = [shot_count] + [s["group"] for s in shots]
+                add_shot.click(
+                    fn=lambda n: self._step_count(n, +1, MAX_SHOTS, minimum=1),
+                    inputs=[shot_count], outputs=_shot_out,
+                )
+                rm_shot.click(
+                    fn=lambda n: self._step_count(n, -1, MAX_SHOTS, minimum=1),
+                    inputs=[shot_count], outputs=_shot_out,
+                )
 
             # ---- audio -----------------------------------------------------
             with gr.Accordion("Audio", open=False):
@@ -1667,32 +1614,23 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             [""] + AUDIO_RETENTION, label="Retention", value="",
                         )
                 with gr.Row():
-                    suggest_sound_btn = gr.Button("Suggest a soundscape",
-                                                  size="sm")
-                    suggest_music_btn = gr.Button("Suggest a score", size="sm")
-                enhancer_keep = gr.Checkbox(
-                    label="Keep the enhancer loaded between presses",
-                    value=ENHANCER_KEEP_LOADED,
-                    info="Much faster on the second press, but it holds "
-                         "several GB the video model may want. Only applies "
-                         "to a copy this plugin loaded itself - an enhancer "
-                         "borrowed from WanGP is WanGP's to release",
-                )
+                    suggest_audio_btn = gr.Button(
+                        "Suggest soundscape and music from the scene",
+                        size="sm",
+                    )
                 audio_status = gr.Markdown("")
                 gr.Markdown(
-                    "Reads the scene and the action above and asks WanGP's "
-                    "**Prompt Enhancer** what this should sound like. Each "
-                    "button writes its own box and leaves the presets alone. "
-                    "They ask separately because one field per request keeps "
-                    "the answer on the field that was asked for. Needs the "
-                    "enhancer switched on and loaded - a Qwen 3.5 one; the "
-                    "captioning enhancers will not follow the instruction."
+                    "Reads the scene, shots and beats above and asks WanGP's "
+                    "**Prompt Enhancer** what this should sound like. It "
+                    "writes the two custom boxes and leaves the presets "
+                    "alone. Needs the enhancer switched on and loaded - a "
+                    "Qwen 3.5 one; the captioning enhancers will not follow "
+                    "the instruction."
                 )
 
             status = gr.Markdown("")
 
-            with gr.Accordion("Summary", open=True,
-                              visible=False) as summary_block:
+            with gr.Group(visible=False) as summary_block:
                 gr.Markdown(
                     "The summary is a reference-mode section. Base modes have "
                     "no summary field, so it is not written when reference "
@@ -1721,7 +1659,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 insert_btn = gr.Button("Insert into prompt", variant="primary")
                 append_btn = gr.Button("Insert as sliding window")
             with gr.Row():
-                clear_action_btn = gr.Button("Clear the action")
+                clear_shots_btn = gr.Button("Clear shots and beats")
                 clear_btn = gr.Button("Clear all fields")
 
             gr.Markdown(
@@ -1737,8 +1675,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # ---- wiring -------------------------------------------------------
 
         flat = [start_image, end_image,
-                ref_mode, duration, style, grading,
-                location, time_of_day, lighting, atmosphere,
+                ref_mode, duration, style, grading, location, lighting, atmosphere,
                 camera_type,
                 video_role, video_desc, video_retention,
                 video_audio, video_audio_desc, entry_count]
@@ -1746,53 +1683,26 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             flat += [e["kind"], e["desc"], e["speaker"], e["onscreen"],
                      e["age"], e["gender"], e["pitch"], e["timbre"],
                      e["rate"], e["accent"], e["lang"],
-                     e["source"], e["retention"], e["note"],
+                     e["source"], e["retention"], e["note"], e["shots"],
                      e["voice_from"], e["motion_from"]]
-        # The action is one field, so the list stops growing here - no
-        # shot_count, no MAX_SHOTS x MAX_BEATS block behind it.
-        flat += [task_types, summary_text, action_text]
+        flat += [task_types, summary_text, shot_count]
+        for s in shots:
+            flat += [s["cut"], s["cutverb"], s["framing"], s["lens"],
+                     s["motion"], s["ampl"], s["speed"], s["rig"],
+                     s["anchor"], s["screen_kind"], s["screen_text"],
+                     s["beat_count"]]
+            for b in s["beats"]:
+                flat += [b["type"], b["speaker"], b["lang"], b["action"],
+                         b["speech"], b["at"], b["carries"], b["cutoff"],
+                         b["carry_phrase"]]
         flat += [ambience_from, ambience_retention,
                  soundscape_presets, soundscape,
                  music_from, music_role, music_retention,
                  music_presets, music]
 
-        # Every insert button reads the whole form, so it can resolve a
-        # speaker ID or a subject's voice without separate wiring. Its own
-        # controls ride on the end, which is why the handlers slice from the
-        # back rather than the front.
-        action_out = [action_text, action_prev, action_status]
-
-        ins_shot.click(fn=self._insert_shot, inputs=flat, outputs=action_out)
-        ins_time.click(fn=self._insert_time, inputs=flat + [at_seconds],
-                       outputs=action_out)
-        ins_camera.click(
-            fn=self._insert_camera,
-            inputs=flat + [cam_verb, cam_framing, cam_lens, cam_motion,
-                           cam_ampl, cam_speed, cam_rig, cam_anchor],
-            outputs=action_out,
-        )
-        ins_dialogue.click(
-            fn=self._insert_dialogue,
-            inputs=flat + [dl_who, dl_type, dl_lang, dl_delivery, dl_speech,
-                           dl_carries, dl_carry_phrase, dl_cutoff],
-            outputs=action_out,
-        )
-        ins_screen.click(fn=self._insert_screen_text,
-                         inputs=flat + [st_kind, st_text], outputs=action_out)
-        undo_action.click(fn=self._undo_action, inputs=[action_prev],
-                          outputs=action_out)
-        clear_action_btn.click(fn=self._clear_action, inputs=[action_text],
-                               outputs=action_out)
-
-        # The enhancer switch rides on the end of the list, like every other
-        # button's own controls.
-        suggest_sound_btn.click(
-            fn=self._suggest_soundscape, inputs=flat + [enhancer_keep],
-            outputs=[soundscape, audio_status],
-        )
-        suggest_music_btn.click(
-            fn=self._suggest_music, inputs=flat + [enhancer_keep],
-            outputs=[music, audio_status],
+        suggest_audio_btn.click(
+            fn=self._suggest_audio, inputs=flat,
+            outputs=[soundscape, music, audio_status],
         )
 
         insert_btn.click(fn=self._build, inputs=flat,
@@ -1801,6 +1711,25 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         append_btn.click(fn=self._append_window,
                          inputs=[self.prompt] + flat,
                          outputs=[self.prompt, status])
+
+        # Shots and beats only - cast, scene, audio and summary usually carry
+        # over between windows, the action does not.
+        shot_fields = []
+        for s in shots:
+            shot_fields += [s["cut"], s["cutverb"], s["framing"], s["lens"],
+                            s["motion"], s["ampl"], s["speed"], s["rig"],
+                            s["anchor"], s["screen_kind"], s["screen_text"],
+                            s["beat_count"]]
+            for b in s["beats"]:
+                shot_fields += [b["type"], b["speaker"], b["lang"],
+                                b["action"], b["speech"], b["at"],
+                                b["carries"], b["cutoff"], b["carry_phrase"]]
+        shot_groups = [s["group"] for s in shots]
+        for s in shots:
+            shot_groups += [b["group"] for b in s["beats"]]
+
+        clear_shots_btn.click(fn=self._clear_shots, inputs=[],
+                              outputs=shot_fields + shot_groups)
 
         # One switch for everything Ref2VA. Values in a hidden block are
         # ignored by the assembly too, so nothing can leak in.
@@ -1821,40 +1750,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             [e["group"] for e in entries]
             + [e["ref_block"] for e in entries]
             + [ambience_ref_block, music_ref_block, summary_block]
+            + [s["group"] for s in shots]
         )
+        for s in shots:
+            all_groups += [b["group"] for b in s["beats"]]
 
-        # ---- the draft ----------------------------------------------------
-        #
-        # Saved after every press that changes something, which covers the
-        # moments most work has just been done, and on a timer for the typing
-        # in between. gr.Timer arrived in Gradio 4.x; without it the button
-        # presses alone still cover the expensive-to-retype parts.
-        save_draft_btn.click(fn=self._save_draft, inputs=flat,
-                             outputs=[draft_status])
-        restore_draft_btn.click(fn=self._restore_draft, inputs=[],
-                                outputs=flat + all_groups + [draft_status])
-
-        for button in (ins_shot, ins_time, ins_camera, ins_dialogue,
-                       ins_screen, undo_action, clear_action_btn):
-            button.click(fn=self._autosave, inputs=flat,
-                         outputs=[draft_status])
-
-        if hasattr(gr, "Timer"):
-            autosave = gr.Timer(AUTOSAVE_SECONDS)
-            autosave.tick(fn=self._autosave, inputs=flat,
-                          outputs=[draft_status])
-
-        # Both Clear buttons do the same thing - one at the top for starting
-        # over, one at the bottom where the build controls are. Clearing is
-        # saved too, so a crash after it cannot resurrect the old form.
-        for button in (clear_btn, clear_top_btn):
-            button.click(fn=self._clear, inputs=[],
-                         outputs=flat + all_groups)
-            button.click(fn=self._save_draft, inputs=flat,
-                         outputs=[draft_status])
-
-        insert_btn.click(fn=self._autosave, inputs=flat,
-                         outputs=[draft_status])
+        clear_btn.click(fn=self._clear, inputs=[], outputs=flat + all_groups)
 
         # Character-creator fields aren't part of _build/_clear's flat list
         # at all - they only ever feed the per-entry "Add to description"
@@ -1872,34 +1773,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             per_entry = [False, "", "", "", "", "", "", "", "", "", ""]
             return per_entry * len(entries) + [gr.update(visible=False)] * len(char_blocks)
 
-        for button in (clear_btn, clear_top_btn):
-            button.click(fn=_reset_char_fields, inputs=[],
-                         outputs=char_fields + char_blocks)
+        clear_btn.click(fn=_reset_char_fields, inputs=[],
+                        outputs=char_fields + char_blocks)
 
-        # Show each entry's name next to its Subject number in the dialogue
-        # Who boxes, purely as a memory aid when juggling several subjects -
-        # the stored value stays "Subject N" and the final prompt is
-        # unaffected.
-        #
-        # The update is returned bare, not wrapped in a list. There is one
-        # output now that the per-beat dropdowns are gone, and Gradio reads a
-        # returned list as that component's value - which for a CheckboxGroup
-        # is exactly what a value looks like, so the update dict lands in the
-        # selection instead of the choices and the next press fails to
-        # preprocess.
-        if char_names:
+        # Show each entry's name next to its Subject number in every beat's
+        # Who dropdown, purely as a memory aid when juggling several
+        # subjects - the stored value stays "Subject N" and the final
+        # prompt is unaffected.
+        all_who_dropdowns = [b["speaker"] for s in shots for b in s["beats"]]
+        if char_names and all_who_dropdowns:
             def _sync_who_labels(*names):
                 choices = []
                 for n in range(MAX_ENTRIES):
                     nm = (names[n] or "").strip() if n < len(names) else ""
                     label = f"Subject {n + 1} ({nm})" if nm else f"Subject {n + 1}"
                     choices.append((label, f"Subject {n + 1}"))
-                return gr.update(choices=choices)
+                return [gr.update(choices=choices)] * len(all_who_dropdowns)
 
             for name_field in char_names:
                 name_field.change(
                     fn=_sync_who_labels, inputs=char_names,
-                    outputs=[dl_who],
+                    outputs=all_who_dropdowns,
                 )
 
         self._wire_model_visibility(root, model_warning)
@@ -1958,7 +1852,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return str(value).strip()
 
     @classmethod
-    def _scene_clause(cls, location, lighting, atmosphere, time_of_day=""):
+    def _scene_clause(cls, location, lighting, atmosphere):
         """
         Location, lighting and atmosphere are visual description, so they are
         woven into the opening shot rather than emitted as their own fields.
@@ -1967,7 +1861,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # dusk" is wrong, but "the setting is a rooftop at dusk" works for
         # interiors and exteriors alike.
         if location:
-            clause = f"The setting is {location} {time_of_day}".rstrip()
+            clause = f"The setting is {location}"
             if lighting:
                 clause += f", lit by {lighting}"
             if atmosphere:
@@ -1987,24 +1881,16 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     @classmethod
     def _opening_clause(cls, style, location, lighting, atmosphere,
-                        camera_type, duration=None, grading="",
-                        time_of_day=""):
+                        camera_type, duration=None, grading=""):
         """
         One sentence establishing the whole clip, written before [Shot 1]:
-        style, setting, hour, light, air and camera body.
+        style, setting, light, air and camera body.
         """
         head = f"A {style[0].lower() + style[1:]} scene" if style else "A scene"
 
         parts = [head]
         if location:
-            # The hour rides along with the setting rather than taking a
-            # clause of its own: "set in an office at night", not "set in an
-            # office, at night".
-            parts.append(f"set in {location} {time_of_day}".rstrip())
-        elif time_of_day:
-            parts.append(f"taking place {time_of_day}"
-                         if not time_of_day.startswith(("at ", "in "))
-                         else time_of_day)
+            parts.append(f"set in {location}")
         if lighting:
             parts.append(f"lit by {lighting}")
         if atmosphere:
@@ -2460,477 +2346,72 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return f'{kind} reading "{screen_text}" is visible in the frame.'
 
     @classmethod
-    def _scan_action(cls, text):
-        """What the action field currently says about its own structure."""
-        text = text or ""
-        marks = [(m.start(), int(m.group(1)))
-                 for m in _ACTION_SHOT_RE.finditer(text)]
-        numbers = [n for _, n in marks]
-        tail = text[marks[-1][0]:] if marks else ""
+    def _shot_text(cls, idx, shot, label_for, lang_for=None,
+                   label_after=None, speaker_info=None, carry_in=False):
+        anchor = cls._s(shot["anchor"])
+        framing = cls._s(shot["framing"])
+        head = f"[Shot {idx + 1}]"
 
-        # An emitting <scenetrans> is one that is not the receiving half
-        # written by a previous Shot press.
-        emitting = False
-        for m in _ACTION_TRANS_RE.finditer(tail):
-            following = tail[m.end():m.end() + 48].lstrip()
-            if not following.lower().startswith("the speech carries over"):
-                emitting = True
-                break
+        lens = cls._s(shot["lens"])
 
-        body = _ACTION_SHOT_RE.sub("", tail)
-        return {
-            "numbers": numbers,
-            "count": len(marks),
-            "next": (max(numbers) + 1) if numbers else 1,
-            "tail": tail,
-            "camera_in_shot": bool(_ACTION_CAMERA_RE.search(body)
-                                   or _ACTION_FRAMING_RE.search(body)),
-            "carry_pending": emitting,
-        }
-
-    @staticmethod
-    def _append_to_line(text, addition):
-        """Everything except Shot continues the line already being written."""
-        text = (text or "").rstrip()
-        if not text:
-            return addition
-        return f"{text} {addition}"
-
-    @classmethod
-    def _speaker_labels(cls, d):
-        """
-        Subject N -> (Sx), plus the voice details voiceover needs.
-
-        The buttons always write the bare speaker ID. Which form it takes in
-        the finished prompt - an inline description in base modes, a
-        <Subject N> label in reference mode - is decided at build time, so
-        the reference switch keeps working after the action is written.
-        """
-        labels, info, missing = {}, {}, []
-        for idx, e in enumerate(d["entries"][:d["entry_count"]]):
-            key = f"Subject {idx + 1}"
-            speaker = cls._s(e["speaker"])
-            if speaker:
-                labels[key] = f"({speaker})"
-            elif cls._s(e["desc"]):
-                missing.append(key)
-            info[key] = {
-                "gender": cls._s(e["gender"]),
-                "onscreen": cls._s(e["onscreen"]),
-            }
-        return labels, info, missing
-
-    @classmethod
-    def _known_speaker_ids(cls, d):
-        """The speaker IDs the cast actually defines, for validation."""
-        ids = []
-        for e in d["entries"][:d["entry_count"]]:
-            speaker = cls._s(e["speaker"])
-            if speaker and speaker not in ids:
-                ids.append(speaker)
-        return ids
-
-    # -- insert buttons -----------------------------------------------------
-
-    @classmethod
-    def _insert_shot(cls, *values):
-        d = cls._unpack(values)
-        text = (d["action"] or "").rstrip()
-        info = cls._scan_action(text)
-
-        line = f"[Shot {info['next']}]"
-        note = ""
-        if info["carry_pending"]:
-            # The other half of a line crossing the cut. The guide asks for
-            # the tag at both connecting points and the continuity stated in
-            # words, and the previous shot only wrote its own half.
-            line += f" <scenetrans>{CARRY_RECEIVE_TEXT}"
-            note = " The carried line was picked up."
-
-        new = f"{text}\n{line}" if text else line
-        return new, text, f"Added Shot {info['next']}.{note}"
-
-    @classmethod
-    def _insert_time(cls, *values):
-        d = cls._unpack(values)
-        seconds = values[-1]
-        text = (d["action"] or "").rstrip()
-        if seconds is None or cls._s(str(seconds)) == "":
-            return gr.update(), gr.update(), "Set **At (seconds)** first."
-        try:
-            stamp = f"At {cls._timecode(float(seconds))},"
-        except (TypeError, ValueError):
-            return gr.update(), gr.update(), "That is not a number of seconds."
-        return cls._append_to_line(text, stamp), text, f"Added {stamp[:-1]}."
-
-    @classmethod
-    def _insert_camera(cls, *values):
-        d = cls._unpack(values)
-        (verb, framing, lens, motion, ampl, speed, rig,
-         anchor) = values[-8:]
-        text = (d["action"] or "").rstrip()
-        info = cls._scan_action(text)
-
-        verb = cls._s(verb)
-        if not verb:
-            # Blank lets the field decide, and it has three cases. A second
-            # camera press inside the same shot is a move, not a cut. A new
-            # shot after an earlier one is a cut. The opening shot is neither
-            # - there is nothing before it to cut from, so it takes no
-            # transition verb at all and simply states what is on screen.
-            if info["camera_in_shot"]:
-                verb = CONTINUE_VERBS[0]
-            elif info["count"] > 1:
-                verb = CUT_VERBS[0]
-            else:
-                verb = ""
-        framing = cls._s(framing)
-        lens = cls._s(lens)
-        rig = cls._s(rig)
-        anchor = cls._s(anchor)
-
-        sentences = []
-        if framing or anchor:
-            if verb:
-                head = verb
-                if framing:
-                    head += f" {framing}"
-            elif framing:
-                # No verb: the framing itself opens the sentence, and with no
-                # anchor after it the lens reads better joined than appended
-                # ("A medium shot on a 35mm lens." not "A medium shot, on a
-                # 35mm lens.").
-                head = framing
-                if lens and not anchor:
-                    head += f" on {lens}"
-                    lens = ""
-            else:
-                # An anchor with nothing to frame it still needs a verb of
-                # some kind, or the sentence is a bare noun phrase.
-                head = "the frame holds"
+        if idx == 0:
+            # Framing plus lens read naturally together: "a wide shot on a
+            # 24mm lens frames ...".
+            lead = framing
+            if lead and lens:
+                lead += f" on {lens}"
+            if lead and anchor:
+                lead += " frames"
             if anchor:
-                # The subject sits in the middle, where the grammar wants it.
-                head += f" of {anchor}" if verb or framing else f" {anchor}"
-            if lens:
-                head += f", on {lens}"
-            if rig:
-                head += f", {rig}"
-            sentences.append(head[0].upper() + head[1:] + ".")
-        elif lens or rig:
-            bits = [b for b in [f"on {lens}" if lens else "", rig] if b]
-            sentences.append("The shot is " + ", ".join(bits) + ".")
-
-        camera = cls._camera_clause(motion, ampl, speed,
-                                    None if sentences else rig)
-        if camera:
-            sentences.append(camera)
-
-        if not sentences:
-            return gr.update(), gr.update(), "Pick a framing, lens, rig or motion first."
-        return (cls._append_to_line(text, " ".join(sentences)), text,
-                "Added the camera.")
-
-    @classmethod
-    def _insert_dialogue(cls, *values):
-        d = cls._unpack(values)
-        (who, dtype, lang, delivery, speech, carries, carry_phrase,
-         cutoff) = values[-8:]
-        text = (d["action"] or "").rstrip()
-
-        who = [w for w in (who or []) if cls._s(w)]
-        speech = cls._s(speech)
-        delivery = cls._s(delivery)
-        if not (speech or delivery):
-            return (gr.update(), gr.update(),
-                    "Write some speech or a delivery first.")
-
-        labels, info, missing = cls._speaker_labels(d)
-        unassigned = [w for w in who if w not in labels]
-        if unassigned:
-            names = ", ".join(unassigned)
-            return (gr.update(), gr.update(),
-                    f"{names} has no **Speaker** ID. Assign one in Cast & "
-                    "subjects, since the line needs something to attribute "
-                    "it to.")
-
-        beat = {
-            "type": cls._s(dtype) or "dialogue",
-            "speaker": who, "lang": cls._s(lang), "action": delivery,
-            "speech": speech, "at": None,
-            "carries": bool(carries) and bool(speech),
-            "cutoff": bool(cutoff) and bool(speech),
-            "carry_phrase": cls._s(carry_phrase),
-        }
-        line = cls._beat_text(beat, labels, {}, speaker_info=info)
-        if not line:
-            return gr.update(), gr.update(), "Nothing to add."
-        return cls._append_to_line(text, line), text, "Added the dialogue."
-
-    @classmethod
-    def _insert_screen_text(cls, *values):
-        d = cls._unpack(values)
-        kind, screen_text = values[-2:]
-        text = (d["action"] or "").rstrip()
-        clause = cls._screen_text_clause(kind, screen_text)
-        if not clause:
-            return gr.update(), gr.update(), "Type the visible text first."
-        return cls._append_to_line(text, clause), text, "Added the visible text."
-
-    @classmethod
-    def _undo_action(cls, previous):
-        if not previous:
-            return gr.update(), "", "Nothing to undo."
-        return previous, "", "Reverted the last insert."
-
-    @classmethod
-    def _clear_action(cls, action):
-        """
-        Clear the action for the next sliding window, leaving cast, scene,
-        audio and summary alone - those usually carry over, the action does
-        not.
-
-        A line still carrying at the end of the window is the one thing that
-        should survive, because the window boundary is itself a cut and the
-        guide wants the tag at both connecting points. Rather than remember
-        a flag - the one piece of hidden state this design refuses - the
-        pick-up half is derived here and written back as ordinary visible
-        text, where it can be read and deleted like anything else.
-        """
-        previous = (action or "").rstrip()
-        if not previous:
-            return "", "", "The action is already empty."
-
-        if cls._scan_action(previous)["carry_pending"]:
-            return (f"[Shot 1] <scenetrans>{CARRY_RECEIVE_TEXT}", previous,
-                    "Cleared. A line was still carrying, so its pick-up half "
-                    "was left in place - delete it if the next window does "
-                    "not follow straight on.")
-        return "", previous, "Cleared the action."
-
-    # -- validation ---------------------------------------------------------
-
-    @classmethod
-    def _d_tag_problem(cls, text):
-        """
-        Walk the <d> tags left to right rather than counting them. Counting
-        is not enough: "<d>a<d>b</d></d>" balances but nests, and the model
-        reads the inner pair as the spoken words. Returns a problem in words,
-        or "" when the tags are sound.
-
-        Also used to check the enhancer's rewrite of a shot, which is the
-        other place a </d> goes missing.
-        """
-        depth = 0
-        for m in _ACTION_D_TAG_RE.finditer(text or ""):
-            if m.group(0) == "<d>":
-                depth += 1
-                if depth > 1:
-                    return "a `<d>` opened inside another `<d>`"
-            else:
-                depth -= 1
-                if depth < 0:
-                    return "a `</d>` with no `<d>` opening it"
-        if depth > 0:
-            return f"{depth} unclosed `<d>`"
-        return ""
-
-    @classmethod
-    def _action_warnings(cls, action, duration, known_ids=None):
-        """
-        Things that will generate but not do what was meant. Warnings only -
-        a freeform field is allowed to be a work in progress, and blocking
-        an insert because a tag is half-typed would be worse than the tag.
-        """
-        action = action or ""
-        problems = []
-
-        tags = cls._d_tag_problem(action)
-        if tags:
-            problems.append(tags)
-
-        # The spec wants the language named inside the tag. The buttons
-        # always write it; a hand-written line often will not.
-        untagged = [b for b in _ACTION_D_BLOCK_RE.findall(action)
-                    if not _ACTION_D_LANG_RE.match(b)]
-        if untagged:
-            problems.append(f"{len(untagged)} `<d>` block(s) with no "
-                            "`[Language]` tag")
-
-        info = cls._scan_action(action)
-        numbers = info["numbers"]
-        if not numbers:
-            problems.append("no `[Shot 1]` marker")
+                lead = f"{lead} {anchor}" if lead else anchor
+            if lead:
+                lead = lead[0].upper() + lead[1:]
+            body = [lead.rstrip(".") + "." if lead else ""]
         else:
-            duplicates = sorted({n for n in numbers if numbers.count(n) > 1})
-            if duplicates:
-                problems.append("repeated shot numbers "
-                                + ", ".join(str(n) for n in duplicates))
-            if numbers != sorted(numbers):
-                problems.append("shot numbers out of order")
-            expected = list(range(1, len(numbers) + 1))
-            if sorted(numbers) != expected and not duplicates:
-                problems.append("gaps in the shot numbering")
+            tc = cls._timecode(shot["cut"])
+            verb = cls._s(shot["cutverb"]) or "the camera cuts to"
+            target = framing or "the next shot"
+            if lens:
+                target += f" on {lens}"
+            lead = f"At {tc}, {verb} {target}" if tc else f"{verb.capitalize()} {target}"
+            if anchor:
+                lead += f" of {anchor}"
+            body = [lead.rstrip(".") + "."]
 
-        # A shot marker with nothing after it generates nothing and spends a
-        # cut doing it.
-        marks = [m for m in _ACTION_SHOT_RE.finditer(action)]
-        empty = []
-        for n, m in enumerate(marks):
-            end = marks[n + 1].start() if n + 1 < len(marks) else len(action)
-            if not action[m.end():end].strip():
-                empty.append(m.group(1))
-        if empty:
-            problems.append("empty shot " + ", ".join(empty))
+        # The receiving half of a line that crosses a cut: the tag marks the
+        # connecting point and the sentence states the continuity in words,
+        # both of which the guide asks for.
+        if carry_in:
+            body.append("<scenetrans>The speech carries over from the "
+                        "previous shot.")
 
-        stamps = [float(m.group(1)) * 60 + float(m.group(2))
-                  for m in _ACTION_TIME_RE.finditer(action)]
-        try:
-            limit = float(duration or 0)
-        except (TypeError, ValueError):
-            limit = 0
-        if limit and any(s > limit for s in stamps):
-            problems.append("a timestamp past the clip duration")
-        if stamps != sorted(stamps):
-            problems.append("timestamps out of order")
+        cam = cls._camera_clause(shot["motion"], shot["ampl"], shot["speed"],
+                                 shot.get("rig"))
+        if cam:
+            body.append(cam)
 
-        # A stamp in the wrong shape is read by nothing - not the ordering
-        # check above, not the duration check, and not the model.
-        loose = []
-        for m in _ACTION_LOOSE_TIME_RE.finditer(action):
-            found = m.group(0).rstrip(",")
-            if found not in loose:
-                loose.append(found)
-        if loose:
-            problems.append("`" + "`, `".join(loose) + "` is not in the "
-                            "`At 00:00.000,` form the model reads")
+        screen = cls._screen_text_clause(shot.get("screen_kind"),
+                                         shot.get("screen_text"))
+        if screen:
+            body.append(screen)
 
-        # A carried line needs its other half. The receiving text is written
-        # by the Shot button, so a missing one means the cut was never made.
-        emits, receives, inherited = 0, 0, 0
-        for m in _ACTION_TRANS_RE.finditer(action):
-            following = action[m.end():m.end() + 48].lstrip().lower()
-            if following.startswith("the speech carries over"):
-                # A pick-up before anything has been carried belongs to the
-                # window before this one - Clear the action leaves it there
-                # on purpose, and its emitting half is in the previous
-                # window, where this field cannot see it.
-                if emits == 0 and receives == 0:
-                    inherited = 1
-                receives += 1
-            else:
-                emits += 1
-        if emits != receives - inherited:
-            problems.append(f"{emits} carried line(s) but "
-                            f"{receives - inherited} pick-up(s)")
+        for beat in shot["beats"]:
+            text = cls._beat_text(beat, label_for, lang_for or {},
+                                  speaker_info=speaker_info)
+            if text:
+                body.append(text)
+                # Identity is written once; later mentions use the short form.
+                if label_after:
+                    who = beat["speaker"]
+                    picked = who if isinstance(who, (list, tuple)) else [who]
+                    for pk in picked:
+                        pk = cls._s(pk)
+                        if pk in label_after:
+                            label_for[pk] = label_after[pk]
 
-        # <cutoff> means the clip ends mid-line, so there is one and it is
-        # last. Anywhere else it is describing something that cannot happen.
-        cutoffs = action.count("<cutoff>")
-        if cutoffs > 1:
-            problems.append(f"{cutoffs} `<cutoff>` marks, but only the end "
-                            "of the clip can cut a line off")
-        elif cutoffs == 1 and not action.rstrip().endswith("<cutoff>"):
-            problems.append("`<cutoff>` is not at the end of the action")
+        return head + " " + " ".join(b for b in body if b)
 
-        # On-screen text is quoted verbatim, so an odd quote count means one
-        # is left open and the quotation swallows what follows.
-        if action.count('"') % 2:
-            problems.append("an odd number of double quotes - some visible "
-                            "text is left unclosed")
-
-        # Retention analysis reads the action to find where each subject
-        # appears, so a subject written in by hand without its speaker ID
-        # will be missed. An ID with no cast entry is the reverse: it
-        # survives into the prompt as a bare (Sx), meaning nothing.
-        if known_ids is not None:
-            unknown = []
-            for m in _ACTION_SPEAKER_RE.finditer(action):
-                for one in [p.strip() for p in m.group(1).split(",")]:
-                    if one and one not in known_ids and one not in unknown:
-                        unknown.append(one)
-            if unknown:
-                problems.append(", ".join(f"`({u})`" for u in unknown)
-                                + " has no entry in Cast & subjects, so it "
-                                "is written through as-is")
-
-        return problems
-
-    @classmethod
-    def _bind_speakers(cls, text, label_for, label_after, key_by_id):
-        """
-        The buttons write the bare speaker ID. The finished prompt needs the
-        subject's identity at first mention and a short reference after, and
-        which form that takes depends on the mode - an inline description in
-        base modes, a <Subject N> label in reference mode.
-
-        Resolving it here rather than baking it in at insert time is what
-        lets the reference switch keep working after the action is written.
-        """
-        seen = set()
-
-        def swap(match):
-            ids = [p.strip() for p in match.group(1).split(",") if p.strip()]
-            keys = [key_by_id.get(i) for i in ids]
-            if not keys or any(k is None for k in keys):
-                return match.group(0)
-            unseen = [k for k in keys if k not in seen]
-            table = label_for if unseen else label_after
-            parts = [table.get(k) or match.group(0) for k in keys]
-            seen.update(keys)
-            if len(parts) == 1:
-                out = parts[0]
-            else:
-                # Several speakers on one line share one compound ID, so the
-                # trailing (Sx) is stripped off each and written once at the
-                # end.
-                joined = ",".join(ids)
-                bare = []
-                for p in parts:
-                    stripped = _ACTION_TRAILING_ID_RE.sub("", p).strip()
-                    if stripped:
-                        bare.append(stripped)
-                out = (f"({joined})" if not bare
-                       else f"{cls._oxford_join(bare)} ({joined})")
-
-            # "(S1) sits back" is how the button writes it, and in base modes
-            # that (S1) becomes a description which then opens the sentence.
-            # The fixed-slot version had _beat_text to capitalise for it;
-            # substituting into freeform text, nothing else will.
-            if out and cls._opens_a_sentence(match.string, match.start()):
-                out = out[0].upper() + out[1:]
-            return out
-
-        return _ACTION_SPEAKER_RE.sub(swap, text or "")
-
-    @staticmethod
-    def _opens_a_sentence(text, pos):
-        """Whether position `pos` is the start of a sentence."""
-        before = (text or "")[:pos].rstrip()
-        if not before:
-            return True
-        before = before.rstrip('"\u201d\u2019\')')
-        if not before:
-            return True
-        # ">" covers a preceding tag: <scenetrans> and </d> both end a
-        # sentence's worth of markup.
-        return before.endswith((".", "!", "?", ":", ";", ">", "\n"))
-
-    @classmethod
-    def _subject_shots(cls, action, speaker_id):
-        """Which shots a speaker ID appears in, for retention_analysis."""
-        if not speaker_id:
-            return []
-        found, current = [], None
-        pattern = re.compile(r"\((?:S\d+\s*,\s*)*"
-                             + re.escape(speaker_id)
-                             + r"(?:\s*,\s*S\d+)*\)")
-        for line in (action or "").split("\n"):
-            m = _ACTION_SHOT_RE.search(line)
-            if m:
-                current = int(m.group(1))
-            if current and pattern.search(line) and current not in found:
-                found.append(current)
-        return found
+    # -- top level ---------------------------------------------------------
 
     @classmethod
     def _unpack(cls, values):
@@ -2954,7 +2435,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         style = cls._s(take())
         grading = cls._s(take())
         location = cls._s(take())
-        time_of_day = cls._s(take())
         lighting = cls._s(take())
         atmosphere = cls._s(take())
         camera_type = cls._s(take())
@@ -2972,15 +2452,32 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "onscreen": take(), "age": take(), "gender": take(),
                 "pitch": take(), "timbre": take(), "rate": take(),
                 "accent": take(), "lang": take(), "source": take(), "retention": take(), "note": take(),
-                "voice_from": take(), "motion_from": take(),
+                "shots": take(), "voice_from": take(), "motion_from": take(),
             })
 
         task_types = take()
         summary_text = cls._s(take())
-        # One freeform field for the whole action. There is no shot_count to
-        # read: the number of shots is counted out of the text itself, by the
-        # same scan the Shot button uses to pick its next number.
-        action = cls._s(take())
+        shot_count = int(cls._s(take()) or 1)
+
+        shots = []
+        for _ in range(MAX_SHOTS):
+            shot = {
+                "cut": take(), "cutverb": take(), "framing": take(),
+                "lens": take(), "motion": take(), "ampl": take(),
+                "speed": take(), "rig": take(), "anchor": take(),
+                "screen_kind": take(), "screen_text": take(),
+                "beat_count": take(),
+                "beats": [],
+            }
+            for _ in range(MAX_BEATS):
+                shot["beats"].append({
+                    "type": take(), "speaker": take(), "lang": take(),
+                    "action": take(), "speech": take(), "at": take(),
+                    "carries": take(), "cutoff": take(),
+                    "carry_phrase": take(),
+                })
+            shot["beats"] = shot["beats"][:int(cls._s(shot["beat_count"]) or 0)]
+            shots.append(shot)
 
         ambience_from = cls._s(take())
         ambience_retention = cls._s(take())
@@ -2995,14 +2492,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return dict(
             start_image=start_image, end_image=end_image,
             ref_mode=ref_mode, duration=duration, style=style,
-            grading=grading, location=location, time_of_day=time_of_day,
+            grading=grading, location=location,
             lighting=lighting, atmosphere=atmosphere, camera_type=camera_type,
             video_role=video_role, video_desc=video_desc,
             video_retention=video_retention, video_audio=video_audio,
             video_audio_desc=video_audio_desc,
             entry_count=entry_count, entries=entries,
             task_types=task_types, summary_text=summary_text,
-            action=action,
+            shot_count=shot_count, shots=shots,
             ambience_from=ambience_from, ambience_retention=ambience_retention,
             soundscape_presets=soundscape_presets, soundscape=soundscape,
             music_from=music_from, music_role=music_role,
@@ -3032,113 +2529,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return combined, f"Appended as window {windows}. " + status.split(". ", 1)[-1]
 
     @classmethod
-    def _speaking_ids(cls, action):
-        """Speaker IDs attached to a <d> block, for the summary draft."""
-        text = action or ""
-        found = []
-        for m in _ACTION_D_BLOCK_RE.finditer(text):
-            # The attribution sits before the tag, in the same sentence.
-            head = text[:m.start()]
-            cut = max(head.rfind(". "), head.rfind("\n"))
-            for sm in _ACTION_SPEAKER_RE.finditer(head[cut + 1:]):
-                for one in [p.strip() for p in sm.group(1).split(",")]:
-                    if one and one not in found:
-                        found.append(one)
-        return found
-
-    @classmethod
-    def _camera_sentence_anchor(cls, sentence):
-        """
-        What was in frame, pulled back out of a camera sentence.
-
-        The button wrote "{verb} {framing} of {anchor}, on {lens}, {rig}.",
-        so the anchor is what sits between "of" and the lens or rig clause -
-        and it is the only part of a camera sentence that says anything at
-        all about what a scene sounds like.
-        """
-        body = sentence.strip().rstrip(".")
-        low = body.lower()
-        if " of " not in low:
-            return ""
-        body = body[low.index(" of ") + 4:]
-        idx = body.lower().find(", on ")
-        if idx > 0:
-            body = body[:idx]
-        keep = []
-        rigs = {r.lower() for r in RIGS if r}
-        for part in [p.strip() for p in body.split(",")]:
-            if part.lower() in rigs:
-                break
-            keep.append(part)
-        return ", ".join(p for p in keep if p).strip()
-
-    @classmethod
-    def _action_sound_lines(cls, action):
-        """
-        The action reduced to what a sound editor can use: what is in frame,
-        what happens, and where someone speaks.
-
-        Camera work is dropped on purpose - framing, lens, motion and rig say
-        nothing about what a scene sounds like, and feeding them in pulls the
-        model towards describing the shot instead of the sound. The spoken
-        words go too: quoting them invites the model to echo dialogue back
-        into a field that must not contain any.
-        """
-        marks = list(_ACTION_SHOT_RE.finditer(action or ""))
-        if not marks:
-            chunks = [(1, action or "")]
-        else:
-            chunks = []
-            for n, m in enumerate(marks):
-                end = marks[n + 1].start() if n + 1 < len(marks) else len(action)
-                chunks.append((int(m.group(1)), action[m.end():end]))
-
-        out = []
-        for number, chunk in chunks:
-            speaks = bool(_ACTION_D_BLOCK_RE.search(chunk))
-            chunk = _ACTION_CARRY_SENTENCE_RE.sub(" ", chunk)
-            chunk = _ACTION_LIPS_RE.sub(".", chunk)
-            chunk = _ACTION_D_BLOCK_RE.sub(" ", chunk)
-            chunk = _ENH_TAG_RE.sub(" ", chunk)
-            chunk = _ACTION_SPEAKER_RE.sub(" ", chunk)
-            # Removing a trailing clause can leave the colon that introduced
-            # it stranded against the full stop.
-            chunk = re.sub(r"\s*[:;,]\s*\.", ".", chunk)
-
-            lines = []
-            for raw in re.split(r"(?<=[.!?])\s+", chunk):
-                sentence = " ".join(raw.split()).strip()
-                if not sentence:
-                    continue
-                if (_ACTION_CAMERA_RE.search(sentence)
-                        or sentence.lower().startswith("the shot is")):
-                    sentence = cls._camera_sentence_anchor(sentence)
-                    if not sentence:
-                        continue
-                # Continuity prose and the closed-lips clause describe how
-                # the cut and the mouth behave, not what anything sounds
-                # like, and the model will happily score them if left in.
-                low = sentence.lower()
-                if low.startswith("the speech "):
-                    continue
-                if low.startswith("while ") and "lips" in low:
-                    continue
-                sentence = sentence.strip(" ,:;")
-                # A stamp is timing, not sound.
-                sentence = _ACTION_TIME_RE.sub("", sentence).strip(" ,")
-                if not sentence:
-                    continue
-                sentence = sentence[0].upper() + sentence[1:]
-                if not sentence.endswith((".", "!", "?")):
-                    sentence += "."
-                lines.append(sentence)
-            if speaks:
-                lines.append("Someone speaks aloud here.")
-            if lines:
-                out.append((number, " ".join(lines)))
-        return out
-
-    @classmethod
     def _draft_summary(cls, *values):
         """
         Compose a first-pass summary from what has been entered, for the user
@@ -3150,8 +2540,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         prefix = cls._s(d["task_types"])
         prefix = " + ".join(p.strip() for p in prefix.split(",") if p.strip())
 
-        action = d["action"]
-        shot_count = max(1, cls._scan_action(action)["count"])
+        shots = d["shots"][:max(1, d["shot_count"])]
         entries = d["entries"][:d["entry_count"]]
 
         named = []
@@ -3169,12 +2558,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # naming what the video is, then the assets it draws on.
         style = cls._s(d["style"])
         duration = d["duration"]
-        # The anchor is no longer a field of its own, so the lead comes from
-        # the setting instead - which is what a human overview opens with
-        # anyway.
-        opening = cls._s(d["location"])
-        if opening and cls._s(d["time_of_day"]):
-            opening += f" {cls._s(d['time_of_day'])}"
+        opening = cls._s(shots[0]["anchor"]) if shots else ""
 
         # "shows" reads better than "is" here, but a duration and style
         # don't fit inside it, so they get their own short sentence after.
@@ -3208,13 +2592,19 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if descriptor and sentences:
             sentences.append("It runs " + " ".join(descriptor) + ".")
 
-        voices = cls._speaking_ids(action)
+        voices = set()
+        for shot in shots:
+            for beat in shot["beats"]:
+                if cls._s(beat["speech"]):
+                    who = beat["speaker"]
+                    picked = who if isinstance(who, (list, tuple)) else [who]
+                    voices.update(cls._s(p) for p in picked if cls._s(p))
         if voices:
             label = "one speaker" if len(voices) == 1 else f"{len(voices)} speakers"
             sentences.append(f"There is dialogue from {label}.")
 
-        if shot_count > 1:
-            sentences.append(f"It runs to {shot_count} shots.")
+        if len(shots) > 1:
+            sentences.append(f"It runs to {len(shots)} shots.")
 
         role = cls._s(d["video_role"])
         if role not in ("", "none"):
@@ -3234,8 +2624,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if not sentences:
             # A source video is only a draftable input in reference mode, so
             # only offer it as a suggestion there.
-            missing = ("a location, a subject, or a source video"
-                       if d["ref_mode"] else "a location or a subject")
+            missing = ("a shot anchor, a subject, or a source video"
+                       if d["ref_mode"] else "a shot anchor or a subject")
             return "", f"Nothing to summarise yet - add {missing} first."
 
         draft = " ".join(sentences)
@@ -3260,9 +2650,16 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         model towards describing the shot instead of the sound.
         """
 
+        def sentence(text):
+            """Field text is phrased to sit mid-sentence; stand it up."""
+            text = cls._s(text)
+            if not text:
+                return ""
+            text = text[0].upper() + text[1:]
+            return text if text.endswith((".", "!", "?")) else text + "."
+
         style = cls._s(d["style"])
         location = cls._s(d["location"])
-        time_of_day = cls._s(d["time_of_day"])
         atmosphere = cls._s(d["atmosphere"])
 
         scene = []
@@ -3270,20 +2667,31 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             scene.append(f"Style: {style}.")
         if location:
             scene.append(f"Setting: {location}.")
-        # Dawn and midnight imply very different sound in the same room, so
-        # the hour is worth stating even though the setting already is.
-        if time_of_day:
-            scene.append(f"Time: {time_of_day}.")
         if atmosphere:
             scene.append(f"Atmosphere: {atmosphere}.")
 
-        shot_lines = cls._action_sound_lines(d["action"])
-        for number, text in shot_lines:
-            scene.append(f"Shot {number}: {text}")
+        shot_content = False
+        for n, shot in enumerate(d["shots"][:max(1, d["shot_count"])]):
+            lines = []
+            anchor = sentence(shot["anchor"])
+            if anchor:
+                lines.append(anchor)
+            for beat in shot["beats"]:
+                action = sentence(beat["action"])
+                if action:
+                    lines.append(action)
+                if cls._s(beat["speech"]):
+                    # The words themselves are withheld - quoting them invites
+                    # the model to echo dialogue back into a field that must
+                    # not contain any.
+                    lines.append("Someone speaks aloud here.")
+            if lines:
+                shot_content = True
+                scene.append(f"Shot {n + 1}: " + " ".join(lines))
 
         # Nothing about where it is or what happens means nothing to listen
         # for, and a style on its own would only get invention back.
-        if not (location or atmosphere or shot_lines):
+        if not (location or atmosphere or shot_content):
             return ""
 
         sound_presets = cls._s(d["soundscape_presets"])
@@ -3313,75 +2721,69 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 + "\n\nSCORE DIRECTION\n" + "\n".join(music))
 
     @classmethod
-    def _ask_for_audio_field(cls, values, which):
+    def _suggest_audio(cls, *values):
         """
-        One field at a time. The combined prompt asked the enhancer to hold
-        two jobs in mind at once, and the weaker ones drift between them -
-        score notes turning up in the soundscape, or the reverse. Asking
-        separately costs a second press and reliably answers the question.
-
-        Returns (text, status). text is "" when nothing usable came back.
+        Read the scene, shots and beats, and ask WanGP's Prompt Enhancer for
+        a soundscape and a score. Writes the two custom text boxes and leaves
+        the preset dropdowns alone, so a suggestion can always be undone by
+        clearing one field.
         """
         d = cls._unpack(values)
-        keep_loaded = bool(values[-1])
         digest = cls._audio_digest(d)
         if not digest:
-            return "", ("Nothing to work from yet - add a **location**, an "
-                        "**atmosphere** or some **action** first.")
+            return (gr.update(), gr.update(),
+                    "Nothing to work from yet - add a scene, a shot **anchor** "
+                    "or a beat first.")
 
-        prompt = (SOUNDSCAPE_ONLY_PROMPT if which == "soundscape"
-                  else MUSIC_ONLY_PROMPT)
-        raw, note = _run_enhancer(prompt, digest, keep_loaded=keep_loaded)
+        raw, note = _run_enhancer(AUDIO_SYSTEM_PROMPT, digest)
         if raw is None:
             # The probe line is worth showing: it says which of the three
             # routes to the enhancer were open, which is the only way to tell
             # a configuration problem from a version one without a terminal.
-            return "", f"No suggestion: {note}.\n\n*{_probe_report()}*"
+            return (gr.update(), gr.update(),
+                    f"No suggestion: {note}.\n\n*{_probe_report()}*")
 
         sound, music = _parse_audio_reply(raw)
-        got = sound if which == "soundscape" else music
-        if not got:
-            # A single-field prompt often gets a bare sentence back with no
-            # label at all, which the prose fallback files under soundscape
-            # whichever field was asked for.
-            got = sound or music
-        if not got:
+        if not sound and not music:
+            # One more pass with a blunter instruction. The usual cause is a
+            # reply that reasoned itself past the token budget, and the retry
+            # prompt forbids the reasoning outright.
             retry, retry_note = _run_enhancer(AUDIO_RETRY_PROMPT, digest,
-                                              max_new_tokens=512,
-                                              keep_loaded=keep_loaded)
+                                              max_new_tokens=512)
             if retry:
                 raw, note = retry, retry_note
                 sound, music = _parse_audio_reply(raw)
-                got = (sound if which == "soundscape" else music) or sound
+        if music.strip().lower().rstrip(".") in ("none", "no score",
+                                                 "no music", "n/a", "silence"):
+            music = ""
 
-        if which == "music" and got.strip().lower().rstrip(".") in (
-                "none", "no score", "no music", "n/a", "silence"):
-            return "", ("The enhancer suggested no score for this scene, so "
-                        "the field is untouched.")
-
-        if not got:
+        if not sound and not music:
             # Showing the reply is the whole point here - a parse failure is
             # otherwise indistinguishable from the enhancer misbehaving, and
             # the raw text says immediately which it was.
             print("[H3 Prompt Builder] audio suggestion did not parse. "
                   "Raw reply:\n" + (raw or "<empty>"))
             excerpt = " ".join((raw or "").split())[:300] or "<empty reply>"
-            return "", ("The enhancer replied but nothing usable parsed out "
-                        "of it. The full reply is in the console; it starts:"
-                        f"\n\n> {excerpt}")
+            return (gr.update(), gr.update(),
+                    "The enhancer replied but nothing usable parsed out of "
+                    "it, twice. The full reply is in the console; it starts:"
+                    f"\n\n> {excerpt}")
 
-        return got, (f"Wrote the {which} ({note}). Presets were left alone - "
-                     "read it before you build, and edit freely.")
+        wrote = []
+        if sound:
+            wrote.append("soundscape")
+        if music:
+            wrote.append("music")
+        status = ("Wrote " + " and ".join(wrote) + f" ({note}). "
+                  "Presets were left alone - read it before you build, and "
+                  "edit freely.")
+        if not music:
+            status += (" The enhancer suggested no score, so that field is "
+                       "untouched.")
 
-    @classmethod
-    def _suggest_soundscape(cls, *values):
-        text, status = cls._ask_for_audio_field(values, "soundscape")
-        return (text if text else gr.update()), status
-
-    @classmethod
-    def _suggest_music(cls, *values):
-        text, status = cls._ask_for_audio_field(values, "music")
-        return (text if text else gr.update()), status
+        return (sound if sound else gr.update(),
+                music if music else gr.update(),
+                status)
 
     @classmethod
     def _build(cls, *values):
@@ -3389,8 +2791,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         start_image = d["start_image"]; end_image = d["end_image"]
         ref_mode = d["ref_mode"]; duration = d["duration"]
         style = d["style"]; grading = d["grading"]
-        location = d["location"]; time_of_day = d["time_of_day"]
-        lighting = d["lighting"]
+        location = d["location"]; lighting = d["lighting"]
         atmosphere = d["atmosphere"]; camera_type = d["camera_type"]
         video_role = d["video_role"]; video_desc = d["video_desc"]
         video_retention = d["video_retention"]; video_audio = d["video_audio"]
@@ -3398,7 +2799,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         entry_count = d["entry_count"]; entries = d["entries"]
         task_types = d["task_types"]
         summary_text = d["summary_text"]
-        action = d["action"]
+        shot_count = d["shot_count"]; shots = d["shots"]
         ambience_from = d["ambience_from"]
         ambience_retention = d["ambience_retention"]
         soundscape_presets = d["soundscape_presets"]; soundscape = d["soundscape"]
@@ -3406,11 +2807,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         music_retention = d["music_retention"]
         music_presets = d["music_presets"]; music = d["music"]
 
-        # The action is one field. Its structure - how many shots, where
-        # each subject appears - is read back out of the text rather than
-        # tracked alongside it.
-        scan = cls._scan_action(action)
-        shot_count = max(1, scan["count"])
+        shots = shots[:max(1, shot_count)]
 
         # One output shape for every case. Characters are subjects whether or
         # not they come from a reference asset, so subject_definitions is
@@ -3428,7 +2825,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Voiceover needs a pronoun for the closed-lips clause and needs to
         # know whether the speaker is visible at all.
         speaker_info = {}       # "Subject 3" -> {"gender": .., "onscreen": ..}
-        key_by_id = {}          # "S1" -> "Subject 1", to bind the action text
         skipped = 0
         uses_reference_assets = False
 
@@ -3477,8 +2873,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 else:
                     label_for[key] = inline
                     label_after[key] = inline
-            if speaker:
-                key_by_id[speaker] = key
             lang_for[f"Subject {idx + 1}"] = cls._s(e["lang"]) or "English"
             speaker_info[key] = {
                 "gender": cls._s(e["gender"]),
@@ -3514,13 +2908,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             marker = cls._s(e["retention"])
             if source and marker:
                 note = cls._s(e["note"])
-                # Which shots the subject appears in is read out of the
-                # action by its speaker ID, so it cannot go stale when a
-                # shot is renumbered or deleted by hand.
-                where = cls._subject_shots(action, speaker)
+                where = cls._s(e["shots"])
                 scope = ""
                 if where:
-                    shot_list = ", ".join(f"[Shot {n}]" for n in where)
+                    shot_list = ", ".join(f"[Shot {p.strip()}]"
+                                          for p in where.split(",") if p.strip())
                     scope = f" (appears in {shot_list})"
                 entry = f"{label}{scope}: {marker}"
                 if note:
@@ -3532,15 +2924,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # they belong here rather than inside the opening shot.
         opening = cls._opening_clause(style, location, lighting,
                                       atmosphere, camera_type, duration,
-                                      grading, time_of_day)
+                                      grading)
 
-        # The action already reads as finished prose - the buttons wrote it
-        # that way. All that is left is to bind the bare (Sx) IDs to the
-        # labels this mode calls for, which is what lets the same text serve
-        # both schemas.
-        bound = cls._bind_speakers(action, label_for, label_after, key_by_id)
-        body = "\n".join(l for l in ([opening] + bound.split("\n"))
-                          if l.strip())
+        # A line crossing a cut is marked at both connecting points. The
+        # shot that starts it says so on its own beat; the shot that receives
+        # it is told here, since a shot cannot see the one before it.
+        carry_in, prev_carries = [], False
+        for s in shots:
+            carry_in.append(prev_carries)
+            prev_carries = any(cls._s(b["speech"]) and b.get("carries")
+                               for b in s["beats"])
+
+        shot_lines = [cls._shot_text(n, s, label_for, lang_for, label_after,
+                                     speaker_info, carry_in[n])
+                      for n, s in enumerate(shots)]
+        body = "\n".join(l for l in ([opening] + shot_lines) if l.strip())
 
         sound_field = cls._merge_audio(
             soundscape_presets, soundscape,
@@ -3616,16 +3014,16 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # identity inline and (S1) is the only label.
             lines = []
             instruction = cls._instruction(start_image, end_image, duration,
-                                           shot_count)
+                                           len(shots))
             if instruction:
                 lines.append(instruction)
             lines += [f"integrated_multimodal_description: {detailed}",
                       f"overall_soundscape: {sound_field}",
                       f"non_diegetic_music: {music_field}"]
-            warnings = cls._action_warnings(action, duration,
-                                            cls._known_speaker_ids(d))
-            if not cls._s(action):
-                warnings.append("the **action** is empty")
+            warnings = []
+            if not any(cls._s(s["anchor"]) for s in shots):
+                warnings.append("no **anchor** on any shot - nothing "
+                                "describes what is in frame")
             check = "Read it through for grammar before generating."
             status = (f"Prompt written. {check}" if not warnings
                       else "Written, but: " + "; ".join(warnings) + f". {check}")
@@ -3633,7 +3031,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         sections = []
         instruction = cls._instruction(start_image, end_image, duration,
-                                       shot_count)
+                                       len(shots))
         if instruction:
             sections.append(instruction)
 
@@ -3654,10 +3052,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Only nag about a task type when something is actually referenced.
         # Subjects invented from description are not reference assets, and
         # most prompts have no task type at all.
-        warnings = cls._action_warnings(action, duration,
-                                        cls._known_speaker_ids(d))
-        if not cls._s(action):
-            warnings.append("the **action** is empty")
+        warnings = []
         # Only a reminder once reference mode is actually on.
         if ref_mode and not prefix:
             warnings.append("reference mode is on but no **task type** is "
@@ -3668,6 +3063,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             warnings.append(f"{skipped} reference entr"
                             f"{'y was' if skipped == 1 else 'ies were'} "
                             "skipped for having no description or source")
+        if not any(cls._s(s["anchor"]) for s in shots):
+            warnings.append("no **anchor** on any shot - nothing describes "
+                            "what is in frame")
+
         # Audio references imply an audio task type.
         audio_slots = {s for s in asset_roles if asset_kind.get(s) == "audio"}
         if (audio_slots or video_audio or video_audio_desc) and \
@@ -3688,230 +3087,55 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                   else "Written, but: " + "; ".join(warnings) + f". {check}")
         return cls._no_blank_lines("\n".join(sections)), status
 
-    # -- the draft ----------------------------------------------------------
-    #
-    # WanGP can go down mid-build, and a half-written prompt is an hour of
-    # work. The whole form is written to one JSON file beside plugin.py so it
-    # survives a crash, a restart, or a browser reload.
-    #
-    # The file holds the flat list positionally rather than by field name.
-    # Naming every field would be a seventh construction site to keep in step,
-    # and getting it wrong there would restore your lens into your anchor -
-    # the exact failure the flat list is already prone to. Instead the length
-    # is recorded and checked: a draft written by a different version of the
-    # plugin is refused outright rather than restored into the wrong slots.
-
     @staticmethod
-    def _draft_path():
-        return Path(__file__).resolve().parent / "h3_draft.json"
-
-    @staticmethod
-    def _draft_backup_path():
-        """The draft the current one replaced, kept one deep."""
-        return Path(__file__).resolve().parent / "h3_draft.prev.json"
-
-    @classmethod
-    def _flat_len(cls):
-        """How many values the flat list carries, derived from _clear."""
-        return len(cls._clear()) - CLEAR_GROUP_UPDATES
-
-    @classmethod
-    def _form_has_content(cls, values):
-        """
-        Whether the form holds anything worth keeping.
-
-        Deliberately semantic rather than a comparison against the cleared
-        defaults: what a freshly built panel hands back is not guaranteed to
-        equal what _clear returns, and getting that wrong in the safe
-        direction means silently declining to save real work.
-        """
-        try:
-            d = cls._unpack(values)
-        except Exception:                             # noqa: BLE001
-            return True          # unreadable is not the same as empty
-        if cls._s(d["action"]) or cls._s(d["summary_text"]):
-            return True
-        for field in ("style", "grading", "location", "time_of_day",
-                      "lighting", "atmosphere", "camera_type", "video_desc",
-                      "soundscape", "music"):
-            if cls._s(d[field]):
-                return True
-        if d["soundscape_presets"] or d["music_presets"]:
-            return True
-        return any(cls._s(e["desc"]) or cls._s(e["speaker"])
-                   for e in d["entries"][:d["entry_count"]])
-
-    @classmethod
-    def _autosave(cls, *values):
-        """
-        The timer and the insert buttons come through here rather than
-        straight to _save_draft.
-
-        An empty form is never written. WanGP restarts with every field at its
-        default, and the timer would otherwise tick twenty seconds later and
-        replace the draft with that blank form before it could be restored -
-        which is exactly what it did, once.
-
-        Clearing is still saved, because Clear calls _save_draft directly.
-        Emptiness only stops the automatic writes.
-        """
-        if not cls._form_has_content(values):
-            return gr.update()
-        return cls._save_draft(*values)
-
-    @classmethod
-    def _save_draft(cls, *values):
-        """
-        Write the whole form to disk. Returns a status line.
-
-        Saving is skipped when nothing has changed since the last write, so a
-        timer ticking against an idle form costs one comparison rather than a
-        file write and a UI update.
-        """
-        payload = list(values)
-        if payload == _DRAFT_CACHE.get("values"):
-            return gr.update()
-
-        stamp = time.strftime("%H:%M:%S")
-        blob = {"flat_len": len(payload), "saved": stamp, "values": payload}
-        path = cls._draft_path()
-        try:
-            # The draft that is about to be replaced is kept as .prev.json.
-            # Autosave will not overwrite an empty form, but it will happily
-            # overwrite a large draft with a small one if you start typing
-            # instead of restoring, and one rotation is enough to get it back.
-            if path.exists():
-                path.replace(cls._draft_backup_path())
-            # Written beside the target and moved into place, so a crash
-            # during the write cannot leave a half-file where the draft was.
-            temp = path.with_suffix(".json.tmp")
-            temp.write_text(json.dumps(blob), encoding="utf-8")
-            temp.replace(path)
-        except Exception as exc:                      # noqa: BLE001
-            return (f"Could not save the draft ({type(exc).__name__}). "
-                    f"Tried `{path}`.")
-
-        _DRAFT_CACHE["values"] = payload
-        return f"Draft saved at {stamp}."
-
-    @classmethod
-    def _load_draft(cls, previous=False):
-        """The saved flat list, or None when there is nothing usable."""
-        path = cls._draft_backup_path() if previous else cls._draft_path()
-        try:
-            blob = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return None
-        except Exception:                             # noqa: BLE001
-            return None
-        if not isinstance(blob, dict) or not isinstance(blob.get("values"), list):
-            return None
-        return blob
-
-    @classmethod
-    def _draft_note(cls):
-        """
-        What to say about the draft on the line under the buttons.
-
-        This is read at panel construction, so it is also the line someone
-        sees straight after a crash - which is the moment to say restore
-        first rather than to describe the feature.
-        """
-        blob = cls._load_draft()
-        backup = cls._load_draft(previous=True)
-        if not blob:
-            if backup:
-                return ("No current draft, but an earlier one from "
-                        f"{backup.get('saved', 'a previous session')} is on "
-                        "disk. **Restore last draft** will offer it.")
-            return ("No saved draft yet. The form is written to disk as you "
-                    "work, so a WanGP crash doesn't cost the prompt.")
-        if blob.get("flat_len") != cls._flat_len():
-            return ("A draft is on disk but it was saved by a different "
-                    "version of this plugin, so restoring it would put values "
-                    "in the wrong fields. **Clear all fields** overwrites it.")
-        return (f"**Draft on disk from {blob.get('saved', 'earlier')}.** "
-                "Restore it before you start typing - once there is something "
-                "in the form it gets saved over the top of this one.")
-
-    @classmethod
-    def _restore_draft(cls):
-        """
-        Put a saved draft back into every field.
-
-        Returns the same shape as _clear: one value per flat input, then the
-        group visibility updates. Refusing is a no-op rather than an error -
-        every output gets a bare gr.update() and the status line says why.
-        """
-        expected = cls._flat_len()
-
-        def unchanged(note):
-            return ([gr.update()] * (expected + CLEAR_GROUP_UPDATES)
-                    + [note])
-
-        # The draft that was replaced is worth offering when the current one
-        # holds nothing - that is what a blank autosave over real work looks
-        # like from here, and the rotation exists to make it recoverable.
-        blob, source = cls._load_draft(), ""
-        if blob and not cls._form_has_content(blob.get("values") or []):
-            older = cls._load_draft(previous=True)
-            if older and cls._form_has_content(older.get("values") or []):
-                blob, source = older, " (the one before it was empty)"
-
-        if not blob:
-            blob = cls._load_draft(previous=True)
-            source = " from the previous session"
-        if not blob:
-            return unchanged("No saved draft to restore.")
-
-        values = blob["values"]
-        if len(values) != expected or blob.get("flat_len") != expected:
-            return unchanged(
-                f"That draft holds {len(values)} fields and this version "
-                f"expects {expected}, so restoring it would shift every "
-                "value after the difference. Left the form alone.")
-
-        # Slots hidden at save time have to be reopened, or the restored
-        # values sit in components nobody can see.
-        d = cls._unpack(values)
-        groups = [gr.update(visible=(i < d["entry_count"]))
-                  for i in range(MAX_ENTRIES)]
-        groups += [gr.update(visible=d["ref_mode"])] * MAX_ENTRIES
-        groups += [gr.update(visible=d["ref_mode"])] * 3
-
-        _DRAFT_CACHE["values"] = list(values)
-        return (list(values) + groups
-                + [f"Restored the draft saved at "
-                   f"{blob.get('saved', 'earlier')}{source}."])
+    def _clear_shots():
+        """Reset the shots and beats, leaving everything else alone - cast,
+        scene, audio and summary usually carry over between windows."""
+        out = []
+        for si in range(MAX_SHOTS):
+            out += ["opening" if si == 0 else None, "-" if si == 0 else "",
+                    "", "", "", "", "", "", "", "", "", 0]
+            out += (["action", [], "", "", "", None, False, False,
+                     CARRY_PHRASES[0]] * MAX_BEATS)
+        out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
+        out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
+        return out
 
     @staticmethod
     def _clear():
-        # start_image, end_image, ref_mode, duration, style, grading,
-        # location, time_of_day, lighting, atmosphere, camera_type,
-        # video_role, video_desc, video_retention, video_audio,
-        # video_audio_desc
-        out = [False, False, False, 8.0, "", "", "", "", "", "", "",
-               "none", "", "", "", ""]
+        # mode, duration, style, location, lighting, atmosphere,
+        # camera_type, video_role, video_desc, video_retention,
+        # video_audio, video_audio_desc
+        out = [False, False, False, 8.0, "", "", "", "", "", "", "none", "", "", "", ""]
         out.append(0)                                 # entry_count
         for _ in range(MAX_ENTRIES):
-            # kind, desc, speaker, onscreen, age, gender, pitch, timbre,
-            # rate, accent, lang, source, retention, note,
+            # kind, desc, speaker, presence, age, gender, pitch, timbre,
+            # rate, accent, lang, source, retention, note, shots
+            # kind, desc, speaker, presence, age, gender, pitch, timbre,
+            # rate, accent, lang, is_ref, source, retention, note, shots,
             # voice_from, motion_from
             out += ["Subject", "", "", "", "", "", "", "", "", "",
-                    "English", [], "", "", "", ""]
-        # task_types, summary, action
-        out += [[], "", ""]
+                    "English", [], "", "", "", "", ""]
+        # task_types, summary, shot_count
+        out += [[], "", 1]
+        for si in range(MAX_SHOTS):
+            # cut, cutverb, framing, lens, motion, ampl, speed, rig,
+            # anchor, beats
+            out += ["opening" if si == 0 else None, "-" if si == 0 else "",
+                    "", "", "", "", "", "", "", "", "", 0]
+            out += (["action", [], "", "", "", None, False, False,
+                     CARRY_PHRASES[0]] * MAX_BEATS)
         # ambience_from, ambience_retention, soundscape_presets, soundscape,
         # music_from, music_role, music_retention, music_presets, music
         out += ["", "", [], "", "", "style", "", [], ""]
 
-        # Re-hide every slot. Shots and beats had their own groups; the
-        # action is one always-visible field, so only the cast entries and
-        # the reference blocks are left to hide.
+        # Re-hide every slot: entries, shots, then beats.
+        # Shot 1 stays visible because a prompt always has at least one.
         out += [gr.update(visible=False)] * MAX_ENTRIES   # entry groups
         out += [gr.update(visible=False)] * MAX_ENTRIES   # reference blocks
         out += [gr.update(visible=False)] * 3   # audio refs + summary block
-        assert len(out) - CLEAR_GROUP_UPDATES > 0
+        out += [gr.update(visible=(i == 0)) for i in range(MAX_SHOTS)]
+        out += [gr.update(visible=False)] * (MAX_SHOTS * MAX_BEATS)
         return out
 
 

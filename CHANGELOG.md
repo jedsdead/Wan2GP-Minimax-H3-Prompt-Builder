@@ -5,6 +5,175 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] — 2026-08-20
+
+### Fixed
+
+- **The repository URL in `plugin_info.json` was wrong**, so the plugin
+  manager pointed at a repo that isn't this one.
+
+### Changed
+
+- **Every Qwen Prompt Enhancer is supported, at any quantization.** The level
+  check was hard-coded to 3 and 4, so `Qwen3.8-27B Uncensored` (level 5) was
+  turned away as though it were a captioning model. Levels are now read from
+  WanGP's own `get_qwen35_prompt_enhancer_variant()`, and an unrecognised
+  level is tried rather than refused — a model that ignores the format is
+  caught by the reply parser, whereas a wrong refusal leaves no way through.
+  Only the Llama captioners are turned away, and the status line now names
+  the enhancer it found.
+
+- **The quantization setting is actually read.** WanGP stores it as
+  `prompt_enhancer_quantization`; the plugin looked for three other spellings
+  and silently fell back to `quanto_int8`. Since a variant spec only overrides
+  the backend it is handed, that meant a self-loaded Qwen3.5 fetched Int8
+  weights when GGUF was chosen, and Qwen3.8 fetched Q4 when Q2 was.
+  `prompt_enhancer_speculative_decoding` is passed through as well, which
+  Qwen3.8-27B uses by default.
+
+## [3.0.0] — 2026-08-19
+
+The shots and beats panel is gone. In its place is one Action field and a
+toolbar that writes into it.
+
+The old panel pre-created `MAX_SHOTS × MAX_BEATS` Gradio components and hid
+most of them, then assembled the prompt from templates. That worked, but it
+made every sentence a fill-in-the-blanks exercise: phrase something the
+template did not expect and you got prose that read as though it had been
+generated, because it had. Editing the result meant editing the prompt box
+after the fact, and the next Insert threw the edit away.
+
+Now the buttons write the same correctly formatted text into a field you can
+edit in place, and the build reads that text back. The formatting the guides
+fix — `[Shot N]`, `<d>` blocks, `<scenetrans>` at both connecting points,
+`<cutoff>`, the voiceover phrasing and its closed-lips clause — is still
+written for you. Everything around it is now yours.
+
+The flat input list shrank from 506 values to 165, and the six construction
+sites that had to be kept in step became four.
+
+### Added
+
+- **The Action field and its toolbar.** One text box holds the whole action.
+  **Shot** starts a new line, everything else appends to the line you are on,
+  so a shot is built left to right and then tidied by hand.
+
+  Nothing is remembered between presses. Shot numbering, whether a camera
+  press is a cut or a move within the shot, and whether a carried line is
+  waiting to be picked up are all worked out by reading the field back. Delete
+  a shot by hand and the next press agrees with what is left, which a counter
+  could not do.
+
+- **Late speaker binding.** The buttons always write the bare `(S1)`. Which
+  form it takes in the finished prompt — an inline description in base modes,
+  a `<Subject 1>` label in reference mode — is decided at build time, so the
+  reference switch keeps working after the action is written.
+
+- **A validation pass on Insert.** Warnings only, never a block; a freeform
+  field is allowed to be a work in progress. It catches unbalanced *and*
+  nested `<d>` tags, `<d>` blocks with no `[Language]` tag, repeated or
+  out-of-order or missing shot numbers, empty shots, timestamps past the clip
+  duration or out of order, timestamps written in a form nothing can read
+  (`At 3s,`), a carried line with no pick-up, `<cutoff>` anywhere but the very
+  end, unclosed quotes around visible text, and speaker IDs with no entry in
+  Cast & subjects.
+
+  That last one is new territory: a `(S7)` with no Subject 7 used to survive
+  into the finished prompt as a bare `(S7)`, meaning nothing to the model and
+  invisible to read past.
+
+- **The draft is saved to disk as you work.** WanGP can go down mid-build, and
+  a half-written prompt is an hour of work. The whole form is written to
+  `h3_draft.json` beside `plugin.py` after every press that changes something,
+  and on a 20-second timer for the typing in between. **Restore last draft**
+  puts it back; **Save draft now** forces a write.
+
+  An automatic save never replaces a draft with an empty form — a restart
+  brings the panel up with every field at its default, and the timer would
+  otherwise write that over the draft twenty seconds later. Every write also
+  keeps the draft it replaced as `h3_draft.prev.json`, which covers the case
+  where you start typing before remembering to restore.
+
+  The file holds the flat list positionally and records its length. Naming
+  every field would be another construction site to keep in step, and getting
+  it wrong there would restore your lens into your anchor — so a draft written
+  by a different version of the plugin is refused outright rather than shifted
+  into the wrong slots.
+
+- **A Clear all fields button at the top of the panel**, alongside the draft
+  controls, so starting over doesn't mean scrolling to the bottom. The one at
+  the bottom stays. Clearing is saved too, so a crash after it can't
+  resurrect the old form.
+
+- **Every section folds.** Mode & keyframes, Scene, Cast & subjects, Action,
+  Audio, Reference task and Summary are all accordions, as are the Camera,
+  Dialogue and Visible text groups inside Action and each cast entry on its
+  own heading.
+
+- **Time of day.** Its own field, separate from lighting — lighting is how the
+  scene is lit, this is when it happens. It reaches the opening sentence and
+  the audio digest, where dawn and midnight imply very different sound.
+
+- **Keep the enhancer loaded.** The `ENHANCER_KEEP_LOADED` constant is now a
+  checkbox. It still only governs a copy the plugin loaded itself; an enhancer
+  borrowed from WanGP is WanGP's to release.
+
+- **Undo last insert**, and a **Clear the action** that preserves an open
+  carry. If a line was still carrying when the action was cleared for the next
+  sliding window, the pick-up half is left behind as ordinary visible text —
+  the window boundary is itself a cut, and its emitting half is in the window
+  before. It is left where it can be read and deleted rather than remembered
+  in a flag.
+
+### Changed
+
+- **The opening shot takes no transition verb.** There is nothing before
+  `[Shot 1]` to cut from, so leaving **Transition** blank there now writes
+  `A medium shot of the detective at his desk, on an 85mm lens.` rather than
+  putting a camera cut in front of it. Blank still picks "cuts to" for a later
+  shot and "moves to" for a second camera press within one, and an explicitly
+  chosen verb is always used as picked.
+
+- **The audio suggestion is two buttons.** Asking for the soundscape and the
+  score in one request made the enhancer hold two jobs in mind at once, and the
+  weaker ones drifted between them — score notes in the soundscape, or the
+  reverse. One field per request costs a second press and reliably answers the
+  question that was asked.
+
+- **The audio digest reads the action.** It pulls the anchor back out of each
+  camera sentence and drops the rest, since framing and lens say nothing about
+  sound, and it strips continuity prose, the closed-lips clause and the spoken
+  words themselves.
+
+- **"Appears in shots" is derived, not typed.** Which shots a subject appears
+  in is read out of the action by speaker ID, so it cannot go stale when a shot
+  is renumbered or deleted.
+
+- **Location presets no longer carry time-of-day tails.** "a farmhouse kitchen
+  at dawn" is now "a farmhouse kitchen", so picking both fields cannot produce
+  "a rooftop at dusk at night". Two launderette entries collapsed into one.
+
+- **"Clear shots and beats" is now "Clear the action."**
+
+### Removed
+
+- The fixed shot and beat slots, `MAX_SHOTS`, `MAX_BEATS`, `shot_count`, the
+  per-shot and per-beat field groups, and the `_shot_text` assembler.
+
+### Fixed
+
+- **Add dialogue raised a Gradio error** once a subject had a name typed into
+  the character creator. The handler that shows that name next to the Subject
+  number returned its update wrapped in a list, which was correct when there
+  were thirty per-beat dropdowns to update and wrong once there was one.
+  Gradio reads a returned list as the component's *value*, and a
+  `CheckboxGroup` value is a list, so the update dict was stored as a selected
+  item and failed when the field was next read back.
+
+- A subject's inline description is capitalised when it opens a sentence. The
+  old assembler capitalised as it built; substituting into freeform text, the
+  binding step has to do it.
+
 ## [2.0.0] — 2026-08-19
 
 The first release where the plugin writes prose it wasn't told to. The Audio

@@ -154,6 +154,35 @@ rather than attempted — a draft shifted by one field would put your lens in
 your anchor, which is exactly the failure the rest of the design works to
 avoid. Delete the file to be rid of it, or press Clear.
 
+## Saved prompts
+
+The draft answers *what was I just doing*. This answers *where is that market
+scene from last week*.
+
+**Saved prompts** sits under the draft controls at the top of the panel. Type
+a name, press **Save prompt**, and the whole form is written to
+`prompts/<name>.json` beside the plugin — one file per prompt, and nothing is
+ever written over without being asked. Saving under a name you've already used
+replaces it, and says **Replaced** rather than **Saved** so you know.
+
+Three ways back in:
+
+- the **Saved prompts** dropdown lists the 10 most recent — pick one and press
+  **Load**
+- **Load most recent** takes the newest without picking anything
+- **Load from file** opens any `.json` in the folder, which is how you reach
+  older prompts past the ten, and how you open one somebody sent you
+
+**Refresh** re-reads the folder if you've added or deleted files outside the
+UI. Loading writes every field, reopening any cast entries and reference
+blocks that were showing when it was saved — the same as restoring a draft,
+and refused the same way if the file was written by a version with a different
+field count.
+
+Names are cleaned before they become filenames: anything that could point
+outside the `prompts` folder is dropped rather than escaped, so a prompt
+called `../../wgp` is a file called `wgp`.
+
 ## Sliding windows
 
 **Insert into prompt** replaces the prompt box. **Insert as sliding window**
@@ -342,8 +371,13 @@ Two fields, and which one a sound belongs in depends on a single question:
 - **Non-diegetic** — score only the audience hears
 
 Music playing on-screen is diegetic and belongs in the action. Both fields have
-preset dropdowns — the music presets lead with score genres and screen-music
-styles — and a free-text box for anything else.
+preset dropdowns and a free-text box for anything else.
+
+The music presets are built on the three things the guide actually asks for —
+**instrumentation, tempo and dynamic development** — rather than genre or mood.
+Its own example reads *"A restrained solo-piano score at a slow tempo, with
+sustained low cello underneath and no swell."* The dropdown is multi-select, so
+you pick one from each axis and they compose into that shape.
 
 **Suggest a soundscape** and **Suggest a score** hand what you've built to
 WanGP's own Prompt Enhancer. See below.
@@ -496,13 +530,19 @@ but keep entries phrased to read naturally mid-sentence.
 `LOCATIONS` entries no longer carry their own time-of-day tails, since that's
 its own field now — if you add your own, leave the hour off it.
 
-`MAX_ENTRIES` sets the cast ceiling. There's no shot or beat ceiling any more;
+`MAX_ENTRIES` sets the cast ceiling. It is 4, which matches the worked example
+in MiniMax's reference guide; the guide states no hard limit, but
+`detailed_description` is normally 350-500 words and that is the real
+constraint on how many subjects you can describe properly. Raising it costs
+about 55 components and 55 KB of page weight per slot, since each one carries
+its own copy of every character-creator dropdown. There's no shot or beat ceiling any more;
 the action is one text field and it holds as many shots as you write.
 
 The enhancer instructions are near the top of `plugin.py`:
 `SOUNDSCAPE_ONLY_PROMPT`, `MUSIC_ONLY_PROMPT`, and `AUDIO_RETRY_PROMPT` as a
 blunter second pass when the first reply won't parse. `AUTOSAVE_SECONDS` sets
-the draft timer.
+the draft timer and `PROMPT_LIST_LIMIT` how many saved prompts the dropdown
+offers.
 
 ---
 
@@ -526,8 +566,9 @@ the draft timer.
   They degrade to a message in the panel rather than an error, but a WanGP
   update could still break them.
 - The draft is one file plus one backup, so it holds one prompt and the one
-  before it. Building a third without losing the first means copying the
-  prompt box somewhere yourself.
+  before it. Keeping more than that is what **Save prompt** is for.
+- Saved prompts have no delete button — remove the files from the `prompts`
+  folder yourself.
 - Autosave needs `gr.Timer` (Gradio 4.x and later). On older Gradio the button
   presses still save, but typing between them isn't covered.
 

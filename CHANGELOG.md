@@ -5,6 +5,60 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] — 2026-08-24
+
+### Added
+
+- **Saved prompts.** The draft is one rolling autosave answering *what was I
+  just doing*; this answers *where is that market scene from last week*. Name
+  a prompt, press **Save prompt**, and the whole form is written to
+  `prompts/<name>.json` beside the plugin.
+
+  Load it back three ways: a dropdown of the 10 most recent, **Load most
+  recent** for the newest without picking, or **Load from file** for anything
+  else in the folder — including a prompt somebody sent you. **Refresh**
+  re-reads the folder after changes made outside the UI.
+
+  Nothing is written over unasked, and saving onto an existing name reports
+  **Replaced** rather than **Saved**, because unlike the draft there is no
+  rotation behind a prompt. Names are cleaned rather than escaped, so one
+  called `../../wgp` becomes a file called `wgp`.
+
+  Loading shares the draft's apply step, so a prompt written by a version with
+  a different field count is refused rather than shifted into the wrong slots
+  — one implementation of that arithmetic, not two.
+
+- `prompts/` added to `.gitignore`.
+
+### Changed
+
+- **The panel is roughly 40% lighter.** Measured against a real Gradio 5.29.0
+  the config went from 550 KB to 336 KB and 616 components to 392, and the
+  served page from 3.2 MB to 1.8 MB.
+
+  This matters beyond feel. Gradio's own startup self-check does a `HEAD`
+  request back at itself with a hardcoded three-second timeout, and
+  `httpx.TimeoutException` is caught *outside* its retry loop — so one slow
+  first render aborts the launch with "When localhost is not accessible, a
+  shareable link must be created", which is not an obvious way for a heavy
+  plugin to announce itself.
+
+  Most of the weight was the eight pre-built cast slots, each carrying its own
+  copy of every character-creator vocabulary. `MAX_ENTRIES` is now 4, matching
+  the worked example in MiniMax's reference guide, and the repeated
+  vocabularies — clothing, ethnicity, hairstyle, age range, height, hair
+  colour, timbre, rate, languages — are trimmed. All of them are still
+  free-text, so nothing became unreachable.
+
+- **Music presets follow the guide's three axes.** The reference guide asks for
+  instrumentation, tempo and dynamic development, and its example reads "A
+  restrained solo-piano score at a slow tempo, with sustained low cello
+  underneath and no swell" — genre and mood are what it steers away from. The
+  list was 72 genre labels; it is now 26 across those three axes, and the
+  multi-select composes one from each. This also stops the dropdown
+  contradicting `MUSIC_ONLY_PROMPT`, which already told the enhancer not to
+  use mood words.
+
 ## [3.0.1] — 2026-08-20
 
 ### Fixed

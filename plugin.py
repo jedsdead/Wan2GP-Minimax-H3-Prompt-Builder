@@ -740,13 +740,17 @@ def _parse_audio_reply(raw):
 # Limits
 # =============================================================================
 
-MAX_ENTRIES = 8      # cast and subjects are one list
+MAX_ENTRIES = 4      # cast and subjects are one list
 MAX_SPEAKERS = 6     # how many speaker slots the Speaker dropdown offers
 
 # Visibility updates _clear and _restore_draft return after the field values:
 # one per cast entry, one per entry's reference block, then the two audio
 # reference blocks and the summary block.
 CLEAR_GROUP_UPDATES = MAX_ENTRIES * 2 + 3
+
+# How many saved prompts the Load dropdown offers. It is a shortcut, not a
+# file manager - the rest of the folder is reached through Load from file.
+PROMPT_LIST_LIMIT = 10
 
 # How often the form is written to disk while you work, in seconds. Only
 # used when the installed Gradio has gr.Timer; otherwise the draft is saved
@@ -946,12 +950,10 @@ CONTINUE_VERBS = [
 
 LANGUAGES = [
     "English", "Mandarin Chinese", "Cantonese", "Japanese", "Korean",
-    "Spanish", "French", "German", "Italian", "Portuguese", "Dutch",
-    "Russian", "Polish", "Ukrainian", "Czech", "Greek", "Turkish",
-    "Arabic", "Hebrew", "Farsi", "Hindi", "Urdu", "Bengali", "Tamil",
-    "Thai", "Vietnamese", "Indonesian", "Tagalog", "Swahili", "Yoruba",
-    "Swedish", "Norwegian", "Danish", "Finnish", "Icelandic",
-    "Irish", "Welsh", "Scottish Gaelic", "Latin",
+    "Spanish", "French", "German", "Italian", "Portuguese", "Russian",
+    "Polish", "Greek", "Turkish", "Arabic", "Hebrew", "Hindi", "Bengali",
+    "Thai", "Vietnamese", "Indonesian", "Tagalog", "Swahili",
+    "Swedish", "Norwegian", "Danish", "Finnish", "Irish", "Welsh",
 ]
 
 VOICE_AGES = ["", "child", "teenage", "young", "young adult", "middle-aged",
@@ -960,12 +962,11 @@ VOICE_GENDERS = ["", "female", "male", "androgynous"]
 VOICE_PITCH = ["", "low", "medium", "high"]
 VOICE_TIMBRE = [
     "", "clear", "raspy", "breathy", "warm", "nasal", "gravelly", "bright",
-    "weathered", "smooth", "resonant", "reedy", "husky", "thin", "rich",
-    "hoarse", "silky", "grainy", "booming", "wavering", "metallic",
+    "weathered", "smooth", "resonant", "husky", "rich", "booming",
 ]
 VOICE_RATE = [
-    "", "slow", "measured", "unhurried", "deliberate", "quick", "rapid",
-    "clipped", "halting", "breathless", "drawling", "steady", "urgent",
+    "", "slow", "measured", "unhurried", "quick", "clipped", "halting",
+    "breathless", "drawling", "steady", "urgent",
 ]
 
 # Character creator ---------------------------------------------------------
@@ -973,26 +974,22 @@ VOICE_RATE = [
 # typeable; entries left blank are simply omitted from the composed sentence.
 
 CHAR_ETHNICITIES = [
-    "", "Asian", "East Asian", "South Asian", "Southeast Asian",
-    "Black", "African", "White", "Caucasian", "Hispanic", "Latino", "Latina",
-    "Middle Eastern", "North African", "Native American", "Indigenous",
-    "Pacific Islander", "Mixed ethnicity",
+    "", "Asian", "East Asian", "South Asian", "Black", "White",
+    "Hispanic", "Middle Eastern", "Native American", "Pacific Islander",
+    "Mixed ethnicity",
 ]
 
 CHAR_GENDERS = ["", "male", "female", "non-binary", "androgynous"]
 
 CHAR_AGE_RANGES = [
-    "", "childhood", "the early teens", "the late teens", "early 20s",
-    "mid-20s", "late 20s", "early 30s", "mid-30s", "late 30s", "early 40s",
-    "mid-40s", "late 40s", "early 50s", "mid-50s", "late 50s", "the 60s",
-    "the 70s", "the 80s", "old age",
+    "", "childhood", "the teens", "early 20s", "late 20s", "early 30s",
+    "mid-30s", "early 40s", "mid-40s", "the 50s", "the 60s", "the 70s",
+    "old age",
 ]
 
 CHAR_HEIGHTS = [
-    "", "under five feet", "five foot two", "five foot four",
-    "five foot six", "five foot eight", "five foot ten", "six feet",
-    "six foot two", "six foot four", "over six feet", "average height",
-    "tall", "short", "petite", "statuesque",
+    "", "short", "petite", "average height", "five foot four",
+    "five foot eight", "six feet", "six foot two", "tall",
 ]
 
 CHAR_BUILDS = [
@@ -1002,15 +999,13 @@ CHAR_BUILDS = [
 
 CHAR_HAIRSTYLES = [
     "", "long straight", "long wavy", "long curly", "shoulder-length",
-    "short cropped", "buzz cut", "shaved head", "bald", "braided",
-    "dreadlocked", "afro", "slicked-back", "messy tousled", "receding",
-    "ponytailed", "pixie cut", "bob cut",
+    "short cropped", "buzz cut", "shaved head", "braided", "dreadlocked",
+    "afro", "slicked-back", "messy tousled", "ponytailed",
 ]
 
 CHAR_HAIR_COLORS = [
-    "", "black", "dark brown", "light brown", "blonde", "platinum blonde",
-    "auburn", "red", "ginger", "grey", "white", "silver", "salt-and-pepper",
-    "dyed vibrant",
+    "", "black", "dark brown", "light brown", "blonde", "auburn", "red",
+    "grey", "white", "salt-and-pepper", "dyed vibrant",
 ]
 
 CHAR_EYE_COLORS = [
@@ -1024,16 +1019,13 @@ CHAR_EYE_COLORS = [
 # written instead.
 CHAR_CLOTHING = [
     "", "a plain white t-shirt and jeans", "a rumpled trenchcoat",
-    "a tailored black suit", "a navy three-piece suit",
-    "a floral summer dress", "a long evening gown",
+    "a tailored black suit", "a floral summer dress", "a long evening gown",
     "a hooded sweatshirt and joggers", "a leather biker jacket",
-    "a wool overcoat and scarf", "a knitted jumper and corduroys",
-    "a white lab coat over scrubs", "chef's whites and an apron",
+    "a wool overcoat and scarf", "a white lab coat over scrubs",
     "a stained apron over a work shirt",
-    "a high-visibility jacket and work boots",
-    "a police uniform", "a military field uniform", "a school uniform",
+    "a high-visibility jacket and work boots", "a police uniform",
+    "a military field uniform", "a school uniform",
     "worn workwear, patched at the knees", "traditional formal dress",
-    "a bathrobe", "full winter gear with gloves and a hat",
 ]
 
 
@@ -1213,80 +1205,41 @@ SOUNDSCAPE_PRESETS = [
 ]
 
 MUSIC_PRESETS = [
-    # --- score genres and screen-music styles ---
-    "a sweeping orchestral adventure score",
-    "a brooding orchestral drama score",
-    "a soaring romantic string score",
-    "a tense thriller score with pulsing ostinato strings",
-    "a horror score with dissonant strings and sudden stingers",
-    "a slasher-film synth score",
-    "a stalking analogue synth pulse",
-    "an 1980s retro-synthwave score",
-    "a cyberpunk industrial synth score",
-    "a science-fiction score with choir and low brass",
-    "a fantasy score with harp, horns and choir",
-    "a western score with lone guitar, whistle and trumpet",
-    "a spaghetti-western score with twanging guitar and vocal wails",
-    "a noir jazz score with muted trumpet and brushed drums",
-    "a smoky late-night saxophone score",
-    "a French New Wave score with light jazz piano",
-    "an Italian neorealist score with mournful accordion",
-    "a period-drama chamber score with strings and piano",
-    "a baroque harpsichord score",
-    "a war-film score with martial snare and low brass",
-    "a heist score with cool bass groove and hi-hats",
-    "a spy-thriller score with surf guitar and brass stabs",
-    "a superhero score with heroic brass fanfare",
-    "a disaster-movie score with rising brass and timpani",
-    "a courtroom-drama score with restrained piano",
-    "a sports-montage score with driving drums and brass",
-    "a coming-of-age score with warm indie guitars",
-    "an indie-film score with fingerpicked acoustic guitar",
-    "a mumblecore score with lo-fi bedroom pop",
-    "a road-movie score with slide guitar and harmonica",
-    "a documentary score with minimal piano and strings",
-    "a nature-documentary score with wide orchestral awe",
-    "a true-crime score with cold synth drones",
-    "a sitcom score with bright brassy stings",
-    "a soap-opera score with lush melodrama strings",
-    "a children's-animation score with playful woodwinds",
-    "an anime score with emotive piano and strings",
-    "a magical-girl anime score with bells and bright synths",
-    "a video-game cinematic score with hybrid orchestra and percussion",
-    "a silent-film score with rollicking piano",
-    "a musical-theatre score with full pit orchestra",
-    "a Bollywood score with tabla, strings and vocals",
-    "a Nordic-noir score with icy ambient textures",
-    "a pastoral animation score with piano and woodwinds",
-    "a minimalist score with repeating arpeggios",
-    "a post-rock crescendo with building guitars and drums",
-    "a trailer score with braams and rising percussion",
-    "an end-credits score with reflective piano and strings",
-    # --- textures and small ensembles ---
-    "a lone cello line held under the scene",
-    "pulsing synth arpeggios building slowly",
-    "a plaintive solo violin",
-    "muted horns over a slow drum shuffle",
-    "distant church organ",
-    "a music-box melody, slightly out of tune",
-    "heavy orchestral brass swells",
-    "fingerpicked banjo at a walking pace",
-    "an ominous low drone with occasional percussion hits",
-    "bright pizzicato strings",
-    "sparse solo piano at a slow tempo",
-    "a low sustained string drone",
-    "a walking double bass with brushed drums",
+    # The guide asks for instrumentation, tempo and dynamic development, and
+    # its own examples read that way - "a restrained solo-piano score at a
+    # slow tempo, with sustained low cello underneath and no swell". Genre
+    # and mood labels are what it steers away from, so the list is built on
+    # those three axes instead and the multi-select composes one across them.
+    #
+    # --- instrumentation ---
+    "a restrained solo piano",
+    "sustained low strings",
+    "a lone cello line",
+    "a full string section",
+    "brushed drums and upright bass",
+    "a muted trumpet over brushed drums",
+    "fingerpicked acoustic guitar",
+    "electric guitar with long reverb",
     "warm analogue synth pads",
-    "a lone acoustic guitar figure",
-    "slow-building orchestral strings",
-    "a muted trumpet over light percussion",
-    "minimal electronic pulse",
-    "a distant choir held under the scene",
-    "plucked harp over sustained cello",
-    "an upright piano with heavy room reverb",
-    "tense staccato strings",
-    "a slow waltz on accordion",
-    "ambient drone with no clear pulse",
+    "a pulsing synth arpeggio",
+    "harp and woodwinds",
+    "low brass and timpani",
+    "a heroic brass fanfare",
+    "sparse percussion and hand claps",
+    # --- tempo ---
+    "at a slow tempo",
+    "at a moderate tempo",
+    "at a brisk tempo",
+    "at a driving tempo",
+    "on a steady pulse",
+    "rubato, with no fixed pulse",
+    # --- dynamic development ---
+    "held quietly under the scene",
+    "swelling gradually, then falling away",
+    "building steadily to a peak",
+    "entering late and fading at the end",
+    "with no swell",
+    "dropping out abruptly at the cut",
 ]
 
 # =============================================================================
@@ -1362,6 +1315,40 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 save_draft_btn = gr.Button("Save draft now", size="sm")
                 clear_top_btn = gr.Button("Clear all fields", size="sm")
             draft_status = gr.Markdown(self._draft_note())
+
+            # The draft is one rolling autosave answering "what was I just
+            # doing". This answers "where is that market scene from last
+            # week" - named, kept, and never written over unasked.
+            with gr.Accordion("Saved prompts", open=False):
+                gr.Markdown(
+                    "Saved into a `prompts` folder beside the plugin, one "
+                    "file each. The dropdown lists the "
+                    f"{PROMPT_LIST_LIMIT} most recent; **Load from file** "
+                    "reaches the rest of the folder, and anything someone "
+                    "sends you."
+                )
+                with gr.Row():
+                    prompt_name = gr.Textbox(
+                        label="Name", placeholder="fishmonger, two shots",
+                        scale=3,
+                    )
+                    save_prompt_btn = gr.Button("Save prompt", size="sm",
+                                                variant="primary", scale=1)
+                with gr.Row():
+                    prompt_picker = gr.Dropdown(
+                        self._prompt_choices(), label="Saved prompts",
+                        value=None, scale=3,
+                    )
+                    load_prompt_btn = gr.Button("Load", size="sm", scale=1)
+                    refresh_prompts_btn = gr.Button("Refresh", size="sm",
+                                                    scale=1)
+                with gr.Row():
+                    load_recent_btn = gr.Button("Load most recent", size="sm")
+                prompt_file = gr.File(
+                    label="Load from file", file_types=[".json"],
+                    file_count="single",
+                )
+                prompt_status = gr.Markdown("")
 
             # Every section below is an accordion so a long form can be
             # folded down to the part being worked on. Open states here are
@@ -1955,6 +1942,20 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             autosave = gr.Timer(AUTOSAVE_SECONDS)
             autosave.tick(fn=self._autosave, inputs=flat,
                           outputs=[draft_status])
+
+        # Loading writes the whole form, exactly as restoring a draft does.
+        form_out = flat + all_groups + [prompt_status]
+        save_prompt_btn.click(fn=self._save_prompt,
+                              inputs=[prompt_name] + flat,
+                              outputs=[prompt_picker, prompt_status])
+        load_prompt_btn.click(fn=self._load_prompt, inputs=[prompt_picker],
+                              outputs=form_out)
+        load_recent_btn.click(fn=self._load_recent_prompt, inputs=[],
+                              outputs=form_out)
+        prompt_file.change(fn=self._load_prompt_file, inputs=[prompt_file],
+                           outputs=form_out)
+        refresh_prompts_btn.click(fn=self._refresh_prompts, inputs=[],
+                                  outputs=[prompt_picker, prompt_status])
 
         # Both Clear buttons do the same thing - one at the top for starting
         # over, one at the bottom where the build controls are. Clearing is
@@ -3947,19 +3948,51 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "in the form it gets saved over the top of this one.")
 
     @classmethod
-    def _restore_draft(cls):
-        """
-        Put a saved draft back into every field.
+    @classmethod
+    def _unchanged_form(cls, note):
+        """Write nothing anywhere and say why - a refusal, not an error."""
+        return ([gr.update()] * (cls._flat_len() + CLEAR_GROUP_UPDATES)
+                + [note])
 
-        Returns the same shape as _clear: one value per flat input, then the
-        group visibility updates. Refusing is a no-op rather than an error -
-        every output gets a bare gr.update() and the status line says why.
+    @classmethod
+    def _apply_saved(cls, blob, describe):
+        """
+        Put a saved form back into every field.
+
+        Shared by the draft and the prompt library, because the shape is the
+        awkward part: one value per flat input, then the group visibility
+        updates, then the status line. Two copies of that arithmetic would be
+        two things to keep in step with the flat list.
         """
         expected = cls._flat_len()
+        values = blob.get("values") or []
+        if len(values) != expected or blob.get("flat_len") != expected:
+            return cls._unchanged_form(
+                f"That was saved with {len(values)} fields and this version "
+                f"expects {expected}, so loading it would shift every value "
+                "after the difference. Left the form alone.")
 
+        # Slots hidden at save time have to be reopened, or the restored
+        # values sit in components nobody can see.
+        d = cls._unpack(values)
+        groups = [gr.update(visible=(i < d["entry_count"]))
+                  for i in range(MAX_ENTRIES)]
+        groups += [gr.update(visible=d["ref_mode"])] * MAX_ENTRIES
+        groups += [gr.update(visible=d["ref_mode"])] * 3
+
+        _DRAFT_CACHE["values"] = list(values)
+        return list(values) + groups + [describe]
+
+    @classmethod
+    def _restore_draft(cls):
+        """
+        Put the autosaved draft back into every field.
+
+        Returns the same shape as _clear plus a status line. Refusing is a
+        no-op rather than an error.
+        """
         def unchanged(note):
-            return ([gr.update()] * (expected + CLEAR_GROUP_UPDATES)
-                    + [note])
+            return cls._unchanged_form(note)
 
         # The draft that was replaced is worth offering when the current one
         # holds nothing - that is what a blank autosave over real work looks
@@ -3976,25 +4009,161 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if not blob:
             return unchanged("No saved draft to restore.")
 
-        values = blob["values"]
-        if len(values) != expected or blob.get("flat_len") != expected:
-            return unchanged(
-                f"That draft holds {len(values)} fields and this version "
-                f"expects {expected}, so restoring it would shift every "
-                "value after the difference. Left the form alone.")
+        return cls._apply_saved(
+            blob, f"Restored the draft saved at "
+                  f"{blob.get('saved', 'earlier')}{source}.")
 
-        # Slots hidden at save time have to be reopened, or the restored
-        # values sit in components nobody can see.
-        d = cls._unpack(values)
-        groups = [gr.update(visible=(i < d["entry_count"]))
-                  for i in range(MAX_ENTRIES)]
-        groups += [gr.update(visible=d["ref_mode"])] * MAX_ENTRIES
-        groups += [gr.update(visible=d["ref_mode"])] * 3
+    # -- the prompt library -------------------------------------------------
+    #
+    # The draft is one rolling autosave: it answers "what was I just doing".
+    # This answers "where is that market scene I built last week". Same file
+    # format, same length check, but named by you and never written over
+    # without being asked.
 
-        _DRAFT_CACHE["values"] = list(values)
-        return (list(values) + groups
-                + [f"Restored the draft saved at "
-                   f"{blob.get('saved', 'earlier')}{source}."])
+    @classmethod
+    def _prompts_dir(cls):
+        """The prompts folder, created on first use."""
+        path = Path(__file__).resolve().parent / "prompts"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception:                             # noqa: BLE001
+            pass
+        return path
+
+    @staticmethod
+    def _prompt_filename(name):
+        """
+        A file name from whatever was typed.
+
+        Anything that could walk out of the prompts folder is dropped rather
+        than escaped - a prompt called "../../wgp" should be a file called
+        "wgp", not a way to write one anywhere on the disk.
+        """
+        name = (name or "").strip()
+        keep = [c for c in name if c.isalnum() or c in " -_.,()"]
+        cleaned = "".join(keep).strip(" .")
+        while ".." in cleaned:
+            cleaned = cleaned.replace("..", ".")
+        return cleaned[:80].strip(" .")
+
+    @classmethod
+    def _prompt_files(cls):
+        """Every saved prompt, newest first."""
+        try:
+            files = [p for p in cls._prompts_dir().glob("*.json") if p.is_file()]
+        except Exception:                             # noqa: BLE001
+            return []
+        return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    @classmethod
+    def _prompt_choices(cls, limit=PROMPT_LIST_LIMIT):
+        """
+        The most recent saved prompts, for the dropdown.
+
+        Capped because the dropdown is a shortcut, not a file manager - the
+        rest of the folder is reachable through Load from file.
+        """
+        return [p.stem for p in cls._prompt_files()[:limit]]
+
+    @classmethod
+    def _read_prompt(cls, path):
+        try:
+            blob = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:                             # noqa: BLE001
+            return None
+        if not isinstance(blob, dict) or not isinstance(blob.get("values"), list):
+            return None
+        return blob
+
+    @classmethod
+    def _save_prompt(cls, name, *values):
+        """
+        Write the form to prompts/<name>.json.
+
+        Returns (dropdown update, status). An existing prompt of that name is
+        replaced, which is what saving under a name you already used means -
+        but it is said out loud, because a prompt is not a draft and losing
+        one is not recoverable from a rotation.
+        """
+        filename = cls._prompt_filename(name)
+        if not filename:
+            return gr.update(), ("Give the prompt a name first - letters, "
+                                 "numbers, spaces, dashes.")
+        if not cls._form_has_content(values):
+            return gr.update(), ("There is nothing in the form to save yet.")
+
+        path = cls._prompts_dir() / f"{filename}.json"
+        existed = path.exists()
+        blob = {
+            "flat_len": len(values),
+            "saved": time.strftime("%Y-%m-%d %H:%M"),
+            "name": filename,
+            "values": list(values),
+        }
+        try:
+            temp = path.with_suffix(".json.tmp")
+            temp.write_text(json.dumps(blob), encoding="utf-8")
+            temp.replace(path)
+        except Exception as exc:                      # noqa: BLE001
+            return gr.update(), (f"Could not save the prompt "
+                                 f"({type(exc).__name__}). Tried `{path}`.")
+
+        note = ("Replaced" if existed else "Saved") + f" **{filename}**."
+        return (gr.update(choices=cls._prompt_choices(), value=filename), note)
+
+    @classmethod
+    def _load_prompt(cls, name):
+        """Load a named prompt from the dropdown."""
+        filename = cls._prompt_filename(name)
+        if not filename:
+            return cls._unchanged_form("Pick a prompt to load first.")
+        path = cls._prompts_dir() / f"{filename}.json"
+        blob = cls._read_prompt(path)
+        if not blob:
+            return cls._unchanged_form(
+                f"Could not read **{filename}** - it may have been moved or "
+                "written by something else.")
+        return cls._apply_saved(
+            blob, f"Loaded **{filename}**, saved {blob.get('saved', 'earlier')}.")
+
+    @classmethod
+    def _load_recent_prompt(cls):
+        """Load whichever prompt was saved last, without picking it first."""
+        files = cls._prompt_files()
+        if not files:
+            return cls._unchanged_form(
+                "No saved prompts yet. **Save prompt** writes one into the "
+                "`prompts` folder beside the plugin.")
+        return cls._load_prompt(files[0].stem)
+
+    @classmethod
+    def _load_prompt_file(cls, upload):
+        """
+        Load a prompt from a file chosen on disk.
+
+        The dropdown only offers the most recent few, so this is how the rest
+        of the folder is reached - and how a prompt someone sent you is
+        opened without copying it in first.
+        """
+        if not upload:
+            return cls._unchanged_form("Choose a file to load first.")
+        path = getattr(upload, "name", upload)
+        blob = cls._read_prompt(path)
+        if not blob:
+            return cls._unchanged_form(
+                f"`{Path(path).name}` is not a prompt this plugin wrote.")
+        label = blob.get("name") or Path(path).stem
+        return cls._apply_saved(
+            blob, f"Loaded **{label}** from file, saved "
+                  f"{blob.get('saved', 'earlier')}.")
+
+    @classmethod
+    def _refresh_prompts(cls):
+        """Re-read the folder, for prompts added or removed outside the UI."""
+        choices = cls._prompt_choices()
+        note = (f"{len(choices)} prompt(s) in `prompts`."
+                if choices else "No saved prompts yet.")
+        return gr.update(choices=choices), note
 
     @staticmethod
     def _clear():

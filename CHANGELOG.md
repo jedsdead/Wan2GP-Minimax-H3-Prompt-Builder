@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] — 2026-08-24
+
+### Changed
+
+- **The audio text boxes are the fields now.** They were labelled "custom /
+  additional information" and merged with the preset dropdowns at build time,
+  which meant a choice could live in two places and neither one showed you the
+  finished field. Each box now has its presets beneath it with an **Add**
+  button that composes the picks into a sentence and writes them in. What you
+  read in the box is what the prompt says.
+
+  Add builds the box up rather than replacing it, and adding the same sentence
+  twice is a no-op instead of a repetition.
+
+- **Music presets are three dropdowns**, one per axis the guide asks for —
+  Instrumentation, Tempo, Development — instead of one mixed list where you had
+  to work out which entries belonged to which. Add composes them in the guide's
+  own order.
+
+- **The Prompt Enhancer reads only the boxes.** The preset dropdowns are no
+  longer shown to it, since they now write into the boxes rather than sitting
+  beside them.
+
+- **`soundscape_presets` and `music_presets` left the flat list.** They fill the
+  boxes through their own button and are read nowhere else, so like the camera
+  and dialogue controls they ride on the end of that button. The flat list drops
+  from 93 fields to 91.
+
 ## [3.1.0] — 2026-08-24
 
 ### Added

@@ -370,14 +370,26 @@ Two fields, and which one a sound belongs in depends on a single question:
 - **Soundscape** — ambience, physical sounds, breathing, laughter
 - **Non-diegetic** — score only the audience hears
 
-Music playing on-screen is diegetic and belongs in the action. Both fields have
-preset dropdowns and a free-text box for anything else.
+Music playing on-screen is diegetic and belongs in the action.
 
-The music presets are built on the three things the guide actually asks for —
-**instrumentation, tempo and dynamic development** — rather than genre or mood.
-Its own example reads *"A restrained solo-piano score at a slow tempo, with
-sustained low cello underneath and no swell."* The dropdown is multi-select, so
-you pick one from each axis and they compose into that shape.
+**The text box is the field.** Each one has preset dropdowns beneath it with an
+**Add** button that composes your picks into a sentence and writes it into the
+box. Nothing is merged behind your back at build time, so what you read in the
+box is exactly what the prompt will say — and exactly what the enhancer is
+shown. Press Add again to build the box up; adding the same sentence twice does
+nothing.
+
+Music has three dropdowns rather than one, because the guide asks for three
+things: **instrumentation, tempo and dynamic development**. Its own example
+reads *"A restrained solo-piano score at a slow tempo, with sustained low cello
+underneath and no swell."* Add composes them in that order:
+
+> Instrumentation `a restrained solo piano` + Tempo `at a slow tempo` +
+> Development `with no swell`
+> → *A restrained solo piano at a slow tempo, with no swell.*
+
+Genre and mood labels are what the guide steers away from, so they aren't
+offered. Every dropdown is still free-text if you want something else.
 
 **Suggest a soundscape** and **Suggest a score** hand what you've built to
 WanGP's own Prompt Enhancer. See below.
@@ -442,9 +454,10 @@ Each writes its own text box and leaves the preset dropdowns alone, so a
 suggestion is always undone by clearing one field.
 
 **What they read.** Style, location, time of day, atmosphere, and the action
-reduced to what a sound editor can use, plus whatever presets and notes you've
-already set. Where you've already chosen something the model is told to build
-on it and fill the gaps rather than restate it.
+reduced to what a sound editor can use, plus whatever is already written in the
+two boxes. The preset dropdowns are not read — they only fill the boxes — so
+there is one place a choice can live. Where you've already written something the
+model is told to build on it and fill the gaps rather than restate it.
 
 **What they deliberately don't read.** Camera work — framing, lens, motion,
 rig. None of it says anything about sound, and feeding it in pulls the model

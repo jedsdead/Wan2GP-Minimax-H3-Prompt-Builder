@@ -1204,15 +1204,16 @@ SOUNDSCAPE_PRESETS = [
     "a washing drum tumbling", "near silence with faint air movement",
 ]
 
-MUSIC_PRESETS = [
-    # The guide asks for instrumentation, tempo and dynamic development, and
-    # its own examples read that way - "a restrained solo-piano score at a
-    # slow tempo, with sustained low cello underneath and no swell". Genre
-    # and mood labels are what it steers away from, so the list is built on
-    # those three axes instead and the multi-select composes one across them.
-    #
-    # --- instrumentation ---
-    "a restrained solo piano",
+# The guide asks for instrumentation, tempo and dynamic development, and its
+# own examples read that way - "a restrained solo-piano score at a slow tempo,
+# with sustained low cello underneath and no swell". Genre and mood labels are
+# what it steers away from.
+#
+# Three lists rather than one, because they are three separate choices and a
+# single mixed dropdown makes you hunt for which entries belong to which axis.
+# The Add button composes one sentence across them.
+MUSIC_INSTRUMENTS = [
+    "", "a restrained solo piano",
     "sustained low strings",
     "a lone cello line",
     "a full string section",
@@ -1226,15 +1227,15 @@ MUSIC_PRESETS = [
     "low brass and timpani",
     "a heroic brass fanfare",
     "sparse percussion and hand claps",
-    # --- tempo ---
-    "at a slow tempo",
-    "at a moderate tempo",
-    "at a brisk tempo",
-    "at a driving tempo",
-    "on a steady pulse",
-    "rubato, with no fixed pulse",
-    # --- dynamic development ---
-    "held quietly under the scene",
+]
+
+MUSIC_TEMPOS = [
+    "", "at a slow tempo", "at a moderate tempo", "at a brisk tempo",
+    "at a driving tempo", "on a steady pulse", "rubato, with no fixed pulse",
+]
+
+MUSIC_DYNAMICS = [
+    "", "held quietly under the scene",
     "swelling gradually, then falling away",
     "building steadily to a peak",
     "entering late and fading at the end",
@@ -1718,15 +1719,23 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             # ---- audio -----------------------------------------------------
             with gr.Accordion("Audio", open=False):
-                soundscape_presets = gr.Dropdown(
-                    SOUNDSCAPE_PRESETS, label="Soundscape presets",
-                    value=[], multiselect=True, allow_custom_value=True,
-                )
+                # The box is the field. The presets are a way of filling it
+                # in, not a second input that gets merged at build time -
+                # which also means what you read here is exactly what the
+                # prompt will say, and what the enhancer is shown.
                 soundscape = gr.Textbox(
-                    label="Soundscape - custom / additional information",
-                    lines=2,
+                    label="Soundscape",
+                    lines=3,
                     placeholder="Ice shifts under the fish and the blade taps the board. Market chatter carries from further down the hall.",
                 )
+                with gr.Row():
+                    soundscape_presets = gr.Dropdown(
+                        SOUNDSCAPE_PRESETS, label="Presets",
+                        value=[], multiselect=True, allow_custom_value=True,
+                        scale=4,
+                    )
+                    add_soundscape_btn = gr.Button("Add", size="sm", scale=1)
+                soundscape_status = gr.Markdown("")
                 # Reference fields sit under their own field and follow the
                 # Ref2VA switch, like every other reference control.
                 with gr.Group(visible=False) as ambience_ref_block:
@@ -1742,15 +1751,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     "Dialogue, singing and music the characters can hear "
                     "belong in a beat, not here."
                 )
-                music_presets = gr.Dropdown(
-                    MUSIC_PRESETS, label="Music presets",
-                    value=[], multiselect=True, allow_custom_value=True,
-                )
                 music = gr.Textbox(
-                    label="Non-diegetic music - custom / additional information",
-                    lines=2,
+                    label="Non-diegetic music",
+                    lines=3,
                     placeholder="A slow upright bass with brushed drums, thinning out as the second shot begins.",
                 )
+                # Three axes rather than one mixed list, because the guide
+                # asks for all three and a single dropdown makes you hunt for
+                # which entries belong to which. Add composes them in the
+                # guide's order.
+                with gr.Row():
+                    music_instruments = dd(MUSIC_INSTRUMENTS, "Instrumentation")
+                    music_tempo = dd(MUSIC_TEMPOS, "Tempo")
+                    music_dynamics = dd(MUSIC_DYNAMICS, "Development")
+                    add_music_btn = gr.Button("Add", size="sm", scale=1)
+                music_status = gr.Markdown("")
                 with gr.Group(visible=False) as music_ref_block:
                     with gr.Row():
                         music_from = gr.Dropdown(
@@ -1850,10 +1865,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # The action is one field, so the list stops growing here - no
         # shot_count, no MAX_SHOTS x MAX_BEATS block behind it.
         flat += [task_types, summary_text, action_text]
-        flat += [ambience_from, ambience_retention,
-                 soundscape_presets, soundscape,
-                 music_from, music_role, music_retention,
-                 music_presets, music]
+        flat += [ambience_from, ambience_retention, soundscape,
+                 music_from, music_role, music_retention, music]
 
         # Every insert button reads the whole form, so it can resolve a
         # speaker ID or a subject's voice without separate wiring. Its own
@@ -1920,6 +1933,20 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             [e["group"] for e in entries]
             + [e["ref_block"] for e in entries]
             + [ambience_ref_block, music_ref_block, summary_block]
+        )
+
+        # The presets fill the boxes and are not read anywhere else, so they
+        # stay out of the flat list - like the camera and dialogue controls,
+        # they ride on the end of their own button.
+        add_soundscape_btn.click(
+            fn=self._add_soundscape_preset,
+            inputs=[soundscape, soundscape_presets],
+            outputs=[soundscape, soundscape_status],
+        )
+        add_music_btn.click(
+            fn=self._add_music_preset,
+            inputs=[music, music_instruments, music_tempo, music_dynamics],
+            outputs=[music, music_status],
         )
 
         # ---- the draft ----------------------------------------------------
@@ -2162,18 +2189,74 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return ""
 
     @classmethod
-    def _merge_audio(cls, presets, freetext, lead="{}."):
-        """Presets first as one sentence, then whatever was typed."""
-        presets = cls._s(presets)
-        freetext = cls._s(freetext)
-        out = []
-        if presets:
-            sentence = lead.format(presets)
-            out.append(sentence[0].upper() + sentence[1:])
-        if freetext:
-            freetext = freetext[0].upper() + freetext[1:]
-            out.append(freetext if freetext.endswith(".") else freetext + ".")
-        return " ".join(out)
+    def _sentence_case(cls, text):
+        """Stand a field's text up as one or more finished sentences."""
+        text = cls._s(text)
+        if not text:
+            return ""
+        text = text[0].upper() + text[1:]
+        return text if text.endswith((".", "!", "?")) else text + "."
+
+    @staticmethod
+    def _compose_music(instruments, tempo, dynamics):
+        """
+        One sentence across the guide's three axes, in its own order:
+        instrumentation, then tempo, then dynamic development.
+        """
+        parts = [p.strip() for p in (instruments, tempo, dynamics)
+                 if isinstance(p, str) and p.strip()]
+        if not parts:
+            return ""
+        head, rest = parts[0], parts[1:]
+        if not rest:
+            sentence = head
+        elif len(rest) == 1:
+            sentence = f"{head} {rest[0]}"
+        else:
+            # "A solo piano at a slow tempo, swelling gradually" - the
+            # development clause is an aside, so it takes a comma.
+            sentence = f"{head} {rest[0]}, {rest[1]}"
+        sentence = sentence[0].upper() + sentence[1:]
+        return sentence if sentence.endswith(".") else sentence + "."
+
+    @classmethod
+    def _append_sentence(cls, existing, addition):
+        """
+        Add a composed sentence to whatever is already in the box.
+
+        The box is the field, not a footnote to the dropdowns, so pressing
+        Add twice builds it up rather than replacing what is there - and
+        adding the same sentence twice is a no-op rather than a repetition.
+        """
+        existing = (existing or "").strip()
+        if not addition:
+            return existing, False
+        if addition.rstrip(".").lower() in existing.rstrip(".").lower():
+            return existing, False
+        return (f"{existing} {addition}".strip() if existing else addition), True
+
+    @classmethod
+    def _add_music_preset(cls, existing, instruments, tempo, dynamics):
+        """Compose the three dropdowns into the score box."""
+        sentence = cls._compose_music(instruments, tempo, dynamics)
+        if not sentence:
+            return gr.update(), "Pick an instrument, a tempo or a development."
+        text, added = cls._append_sentence(existing, sentence)
+        if not added:
+            return gr.update(), "That is already in the box."
+        return text, "Added to the score."
+
+    @classmethod
+    def _add_soundscape_preset(cls, existing, presets):
+        """Compose the chosen ambience presets into the soundscape box."""
+        chosen = [p for p in (presets or []) if cls._s(p)]
+        if not chosen:
+            return gr.update(), "Pick a preset first."
+        sentence = f"The scene carries {cls._oxford_join(chosen)}."
+        text, added = cls._append_sentence(existing, sentence)
+        if not added:
+            return gr.update(), "That is already in the box."
+        return text, "Added to the soundscape."
 
     @staticmethod
     def _step_count(current, delta, maximum, minimum=0):
@@ -3097,12 +3180,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         ambience_from = cls._s(take())
         ambience_retention = cls._s(take())
-        soundscape_presets = cls._s(take())
         soundscape = cls._s(take())
         music_from = cls._s(take())
         music_role = cls._s(take())
         music_retention = cls._s(take())
-        music_presets = cls._s(take())
         music = cls._s(take())
 
         return dict(
@@ -3117,10 +3198,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             task_types=task_types, summary_text=summary_text,
             action=action,
             ambience_from=ambience_from, ambience_retention=ambience_retention,
-            soundscape_presets=soundscape_presets, soundscape=soundscape,
+            soundscape=soundscape,
             music_from=music_from, music_role=music_role,
             music_retention=music_retention,
-            music_presets=music_presets, music=music,
+            music=music,
         )
 
     @classmethod
@@ -3399,26 +3480,23 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if not (location or atmosphere or shot_lines):
             return ""
 
-        sound_presets = cls._s(d["soundscape_presets"])
+        # Only what is in the boxes. The preset dropdowns write into them
+        # rather than sitting alongside, so there is one place a choice can
+        # live and the model is shown exactly what the prompt will say.
         sound_note = cls._s(d["soundscape"])
         sound = []
-        if sound_presets:
-            sound.append(f"Already chosen: {sound_presets}.")
         if sound_note:
-            sound.append(f"Notes: {sound_note.rstrip('.')}.")
-        if not sound:
+            sound.append(f"Already written: {sound_note.rstrip('.')}.")
+        else:
             sound.append("Nothing chosen. Work it out from the scene.")
 
-        music_presets = cls._s(d["music_presets"])
         music_note = cls._s(d["music"])
         music = []
         if style:
             music.append(f"Style: {style}.")
-        if music_presets:
-            music.append(f"Already chosen: {music_presets}.")
         if music_note:
-            music.append(f"Notes: {music_note.rstrip('.')}.")
-        if not (music_presets or music_note):
+            music.append(f"Already written: {music_note.rstrip('.')}.")
+        else:
             music.append("Nothing chosen. Work out a score that suits the scene.")
 
         return ("SCENE\n" + "\n".join(scene)
@@ -3514,10 +3592,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         action = d["action"]
         ambience_from = d["ambience_from"]
         ambience_retention = d["ambience_retention"]
-        soundscape_presets = d["soundscape_presets"]; soundscape = d["soundscape"]
+        soundscape = d["soundscape"]
         music_from = d["music_from"]; music_role = d["music_role"]
         music_retention = d["music_retention"]
-        music_presets = d["music_presets"]; music = d["music"]
+        music = d["music"]
 
         # The action is one field. Its structure - how many shots, where
         # each subject appears - is read back out of the text rather than
@@ -3655,13 +3733,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         body = "\n".join(l for l in ([opening] + bound.split("\n"))
                           if l.strip())
 
-        sound_field = cls._merge_audio(
-            soundscape_presets, soundscape,
-            lead="The scene carries {}.",
-        ) or "N/A"
+        # The boxes are the fields now - the presets wrote into them, so
+        # there is nothing left to merge here.
+        sound_field = cls._sentence_case(soundscape) or "N/A"
 
         # Empty means no score, which is what N/A says. No separate switch.
-        music_field = cls._merge_audio(music_presets, music, lead="{}.") or "N/A"
+        music_field = cls._sentence_case(music) or "N/A"
 
         video_label = ""
         if video_role != "none" and video_desc:
@@ -3849,7 +3926,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                       "soundscape", "music"):
             if cls._s(d[field]):
                 return True
-        if d["soundscape_presets"] or d["music_presets"]:
+        if cls._s(d["soundscape"]) or cls._s(d["music"]):
             return True
         return any(cls._s(e["desc"]) or cls._s(e["speaker"])
                    for e in d["entries"][:d["entry_count"]])
@@ -4182,9 +4259,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     "English", [], "", "", "", ""]
         # task_types, summary, action
         out += [[], "", ""]
-        # ambience_from, ambience_retention, soundscape_presets, soundscape,
-        # music_from, music_role, music_retention, music_presets, music
-        out += ["", "", [], "", "", "style", "", [], ""]
+        # ambience_from, ambience_retention, soundscape,
+        # music_from, music_role, music_retention, music
+        out += ["", "", "", "", "style", "", ""]
 
         # Re-hide every slot. Shots and beats had their own groups; the
         # action is one always-visible field, so only the cast entries and

@@ -185,17 +185,84 @@ called `../../wgp` is a file called `wgp`.
 
 ## Sliding windows
 
-**Insert into prompt** replaces the prompt box. **Insert as sliding window**
-appends the built prompt below what's already there, separated by a blank line
-— so you build one window, insert it, then write the next and append that.
-Since each assembled prompt has no blank lines of its own, the separator is
-unambiguous.
+**Insert into prompt** replaces the prompt box. The two **Append** buttons add
+the built prompt below what's already there, separated by a blank line — so you
+build one window, append it, then write the next and append that. Since each
+assembled prompt has no blank lines of its own, the separator is unambiguous.
 
-Two things to know. **Duration** is the length of *that window*, since
-sliding-window timing restarts at zero for each one. And WanGP's *How to
-Process each Line of the Text Prompt* setting must be on the
+WanGP's *How to Process each Line of the Text Prompt* setting must be on the
 paragraph-per-sliding-window option — on the default queue setting each window
 becomes a separate job instead.
+
+### How the windows meet
+
+Which Append you press decides how this window joins the one before it.
+
+**Append continuing window** carries the previous window's closing frames and
+audio over as conditioning, for when the action runs straight on. **Append as
+new shot** carries nothing, for a hard cut to somewhere else.
+
+There's no third option, because a cut with an overlap isn't a thing: the
+overlap frames *are* the previous window's ending, handed to the model as
+picture and audio. Asking it to cut away from them at the same time is a
+contradiction, and WanGP treats a new shot as exactly "no overlap".
+
+This is separate from a cut *inside* a window, which a second `[Shot 2]` with
+a timestamp already does. A window can hold three cuts and still join the one
+before it seamlessly. The window boundary and the shot boundaries are
+independent decisions.
+
+Neither command is written on the first window — its overlap is clamped to
+whatever a start image or Continue Video source provides, which on plain
+text-to-video is nothing.
+
+### Window length
+
+**Length of this window** sits above the insert buttons rather than up in
+Scene, because it belongs to the window rather than the clip, and you rarely
+know it until the action is written. Timing restarts at zero in each window,
+so it's always measured from that window's own `[Shot 1]`.
+
+Tick **Write scheduling into the prompt** and it's written as a `/duration`
+command, which **overrides both *Sliding Window Size* and *Number of frames***
+for the generation — so you don't need to go and set them.
+
+That's off by default. Overriding your sliders should be something you ask
+for, not something that happens because you used the builder. Left off,
+nothing is written, WanGP's scheduler stays inactive and everything runs from
+the UI as normal; the blank line still separates the windows, and the length
+warnings still apply, because they're about what H3 does with a window that
+long either way.
+
+With it on, it's written on every window, including a single one:
+WanGP pads a video out to *Number of frames* by repeating the last paragraph,
+and skips that only when some window carries a `/duration`, so all or none are
+the only safe choices.
+
+The commands look like this, and WanGP strips them before the model reads the
+prompt:
+
+```
+[/duration=8s]                  first window
+[/duration=12s,/overlap=18]     continuing
+[/duration=6s,/new_shot]        hard cut
+```
+
+They're ordinary text in the box, so you can edit them by hand. `/duration`
+also takes a frame count (`[/duration=192]`) or a percentage of the total.
+
+MiniMax documents 4 to 15 seconds for one H3 window, and the *Sliding Window
+Size* slider stops at 481 frames — 20.04 seconds at 24fps. Nothing here
+enforces either. Go past them and the status line tells you the frame count
+you've asked for and what you've passed, then writes the prompt anyway: a long
+window is a decision about quality and VRAM, not a mistake, and a later model
+may widen the band. Under 4 seconds you're told that H3 generates 107 frames
+minimum and may raise the overlap above what you asked for to fill them.
+
+On a long window the status line also lists the timestamps that open a shot,
+as candidate places to split. Nothing splits automatically — where the
+boundary goes is yours, and so is rebasing the timestamps, renumbering the
+shots and choosing the join.
 
 **Clear the action** resets only the action, leaving cast, scene, audio and
 summary in place for the next window.
@@ -207,16 +274,25 @@ is left behind as ordinary text —
 [Shot 1] <scenetrans>The speech carries over from the previous shot.
 ```
 
-— because the window boundary is itself a cut and its other half is in the
-window you just wrote. Delete the line if the next window doesn't follow
-straight on. **Undo last insert** still holds the whole cleared window.
+— because its other half is in the window you just wrote, where this field
+can't see it. That pick-up is the clearest signal you have that the two
+windows are connected, so it usually means **Append continuing window** is the
+one you want. Delete the line if the next window doesn't follow straight on.
+**Undo last insert** still holds the whole cleared window.
+
+The reverse doesn't hold, which is why nothing is decided for you: a shot can
+carry straight on with nobody talking, so no pick-up proves nothing either
+way. The one case the builder does speak up about is cutting away from a
+window that ends on a `<cutoff>` — that line is still running.
 
 ---
 
 ## Sections
 
 Every section is an accordion — click its heading to fold it away. The panel
-is long, and folding what you've finished with beats scrolling past it.
+is long, and folding what you've finished with beats scrolling past it, so it
+starts folded. Action is the exception: it's the one field nobody skips, and
+an all-closed panel reads as empty on first run.
 
 ### Scene
 
@@ -247,6 +323,23 @@ composes a sentence like:
 
 > John, an Asian male in his mid-40s, six feet tall with a muscular build,
 > long straight black hair and brown eyes, wearing a rumpled trenchcoat.
+
+**Save subject** writes the character to `subjects/<name>.json` beside the
+plugin, and the dropdown in that entry loads it back into any slot. It's the
+same idea as saved prompts, for the thing you'll reuse most often — a
+recurring character doesn't want rebuilding from the creator every time.
+
+Three things aren't saved. The Ref2VA reference fields — source asset,
+retention, what is retained, voice from, motion from — name assets attached
+to *this* project; carried into another they'd point at slots holding
+something else. And the speaker ID describes the subject's part in this
+prompt's action rather than anything about the character, so loading Marcus
+into slot 3 leaves slot 3's existing ID alone instead of dragging `(S1)` in
+on top of whoever already has it.
+
+Saved by field name rather than by position, so a character saved today still
+loads after the plugin gains a field — anything the file doesn't know about
+is left as it is, and the status line says how many.
 
 Every field is optional; leave any of them blank and the grammar adjusts
 rather than leaving a gap. Clothing goes last, so the sentence reads as a
@@ -400,6 +493,28 @@ and rhythm, instrumentation, mood).
 
 ### Reference task
 
+**These tick themselves.** A subject drawn from a picture or video implies
+reference generation; a voice reference implies an audio task; the keyframe
+boxes imply keyframe completion; a Reference sources row implies whatever its
+role means. For audio, the retention marker decides between *reuse* and
+*reference* — which is exactly the question of whether the clip itself lands
+in the output or only guides what gets generated.
+
+It unticks as well as ticks, but only ever what it ticked itself. Pick
+Picture 1 on a subject and
+*reference generation* appears; change your mind and remove it, and the tick
+goes with it — so the summary never claims a reference you're not using. A box
+you ticked yourself was never the plugin's to begin with and is left alone, so
+*video continuation* for a source video you attached on WanGP's side survives
+every later edit.
+
+After a page reload the plugin has forgotten what it ticked, so the first sync
+can only add. A tick left stale across a reload survives until you touch the
+field that implied it.
+
+You'll mostly never open this tab, which is the point — an unticked task type
+is invisible until the summary comes out without its prefix.
+
 Task type, which becomes the bracketed prefix on the summary, and the **Source
 video** section nested beneath it. Both appear only in reference mode.
 
@@ -434,6 +549,14 @@ prompt box:
 - speaker IDs with no entry in Cast & subjects — a stray `(S7)` reaches the
   finished prompt as a bare `(S7)`, meaning nothing to the model and easy to
   read straight past
+- a window length outside what H3 documents, with the frame count and what it
+  passed, plus the shot boundaries you could split at
+- appending a new shot after a window that ends on a `<cutoff>`, since that
+  line is still running
+- keyframe boxes ticked on a window after the first, where the picture
+  numbering has shifted
+- audio taken from a video mixed with standalone audio references, which
+  WanGP's selector doesn't allow
 
 ---
 
@@ -519,16 +642,66 @@ in order; they all vanish as soon as you type.
 
 ---
 
-## Reference slots
+## Reference sources
+
+**A label belongs to the asset, not to the job it does.** `<Video 1>` means
+*the first video I attached*, whatever duties it ends up serving. That's the
+one rule the whole section rests on.
 
 The model accepts up to 9 images, 3 videos and 3 audio clips, but WanGP's
 selectors offer **two** videos and **two** audio references, so the dropdowns
 stop there. Slots follow upload order — reordering your uploads silently
 reassigns them.
 
-WanGP's Audio References selector is a single dropdown, so **Use
-Reference-Video Soundtrack(s)** and standalone audio clips are alternatives,
-not additions. The plugin warns if you describe both.
+The **Reference sources** section is where you declare each attachment once:
+which slot it is, what it does, what it contributes, and its retention marker.
+Name the same slot on two rows and you're saying one file does two jobs.
+
+Duties a **subject** owns — its voice, its motion, its appearance — go on the
+subject instead, in Cast & subjects, because they belong to the subject rather
+than to the file. Both routes feed the same registry, so a slot named in both
+merges. A video used as a subject's appearance source, as that subject's
+motion reference, and as a camera-structure row comes out as:
+
+```
+<Video 1> is the appearance and content reference for <Subject 1> (S1), the
+motion and performance reference for <Subject 1> (S1) and the camera and
+cutting-structure reference, supplying the low tracking trajectory.
+```
+
+One definition, one retention line, all three duties. Two files stay two
+assets; the merge is by slot, not by coincidence.
+
+A picture named as a subject's source doesn't get its own definition — the
+guide only wants a standalone `<Picture N>` entry when the picture is a
+keyframe, composition anchor, edited frame or storyboard, which is what the
+roles in this section are for. Give a picture one of those roles and it earns
+its line. A video always earns one, since the guide treats `<Video N>` as a
+whole-asset role in its own right.
+
+### A video's soundtrack
+
+**Taken from** is how you declare it: `Audio 1`, taken from `Video 1`. That
+matches what WanGP does underneath — selecting reference-video soundtracks
+spends one audio-reference slot per video, and the soundtrack shares its
+video's uploaded file. Once declared, it's available to the soundscape and
+music fields like any other audio reference.
+
+H3's Audio References selector offers one or two standalone references *or*
+video soundtracks, never a mix. The plugin warns if you describe both.
+
+**Voice from** offers the video slots too. Picking a video there means *the
+soundtrack of that video*, and you don't have to declare anything for it to
+work — WanGP spends one audio slot per reference video in video order, so
+`<Video 2>`'s soundtrack is `<Audio 2>`.
+
+The prompt always names an `<Audio N>`, and says where it came from. The guide
+gives that label to audio referenced for voice and numbers it independently of
+video, so a `<Video N>` wouldn't be read as an audio reference at all.
+
+That ordering is an assumption, not a rule. If you've declared a row pairing
+the soundtrack with a different slot, the row wins and nothing complains — you
+can see the WanGP panel and the plugin can't.
 
 ---
 
@@ -542,6 +715,13 @@ but keep entries phrased to read naturally mid-sentence.
 
 `LOCATIONS` entries no longer carry their own time-of-day tails, since that's
 its own field now — if you add your own, leave the hour off it.
+
+The five `H3_*` window constants — `H3_FPS`, `H3_WINDOW_FRAMES_MIN`,
+`H3_WINDOW_FRAMES_MAX`, `H3_WINDOW_DOC_SECONDS` and `H3_OVERLAP_DEFAULT` — are
+H3's own figures, read out of WanGP's model definition rather than guessed at,
+with their provenance noted beside them. Every window warning and every
+emitted command reads them from there, so a later model that widens the band
+is an edit to those five lines and nothing else.
 
 `MAX_ENTRIES` sets the cast ceiling. It is 4, which matches the worked example
 in MiniMax's reference guide; the guide states no hard limit, but
@@ -580,6 +760,11 @@ offers.
   update could still break them.
 - The draft is one file plus one backup, so it holds one prompt and the one
   before it. Keeping more than that is what **Save prompt** is for.
+- Saved prompts and drafts from 3.1.1 are upgraded on load: the Source
+  video block's settings become rows in Reference sources, and the status
+  line says so. Anything saved under a layout the plugin doesn't recognise
+  is refused rather than guessed at, since a wrong guess would be silent.
+
 - Saved prompts have no delete button — remove the files from the `prompts`
   folder yourself.
 - Autosave needs `gr.Timer` (Gradio 4.x and later). On older Gradio the button

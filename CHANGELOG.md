@@ -5,6 +5,294 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] — 2026-09-01
+
+### Added
+
+- **The prompt can carry its own sliding-window scheduling.** Tick **Write
+  scheduling into the prompt** and every window is written with a
+  `[/duration=Xs]` command at the head of its paragraph, which WanGP strips
+  before the model sees it. That command overrides both *Sliding Window
+  Size* and *Number of frames* for the generation, so the length you type is
+  the length you get without a trip to the settings.
+
+  **Off by default.** Overriding someone's sliders is a thing to be asked
+  for, not a thing that happens because the builder was used. Left off,
+  nothing is written, WanGP's scheduler stays inactive, and the whole
+  generation runs from the UI as it always did — the blank-line separator
+  still does the windowing, and the length warnings still apply, because
+  they are about what H3 will do with a window that long either way.
+
+  Switched on, it is written on every window including a single one, and
+  that is deliberate: WanGP pads a video out to *Number of frames* by
+  repeating the last paragraph, and skips that only when some window carries
+  a `/duration`. All or none are the safe choices. All is the one that
+  honours the field.
+
+- **Two append buttons instead of one.** **Append continuing window** carries
+  the previous window's closing frames and audio over as conditioning
+  (`/overlap=18`); **Append as new shot** carries nothing (`/new_shot`). A
+  hard cut with an overlap is not expressible, and should not be — the
+  overlap frames *are* the previous window's ending, so asking the model to
+  cut away from them at the same time is a contradiction.
+
+  This is separate from a cut *inside* a window, which a second `[Shot 2]`
+  with a timestamp already does. The window boundary and the shot boundaries
+  are independent decisions.
+
+  Neither command is written on the first window. Its overlap is clamped to
+  whatever a start image or Continue Video source provides — nothing at all
+  on plain text-to-video — so a join there would imply a control the prompt
+  does not have.
+
+- **Warnings about window length, with the arithmetic shown.** Over 15
+  seconds cites the band MiniMax documents; over 481 frames says the Sliding
+  Window Size slider would not let you ask for it at all; under 4 seconds
+  explains that H3 generates 107 frames minimum and may raise the overlap
+  above what was asked to fill them.
+
+  All advisory. `/duration` has no ceiling in WanGP, a longer window is a
+  decision about quality and VRAM rather than a mistake, and a later model
+  may widen the band or remove the problem. The five numbers behind these
+  warnings sit in one constants block with their provenance noted, so that
+  model is a five-line edit.
+
+- **Split points offered on a long window.** Timestamps that open a `[Shot N]`
+  are listed as candidates. Only those — a timestamp mid-shot is a beat, not
+  somewhere to split. Nothing is split automatically: where the boundary goes
+  is a creative decision, and rebasing the timestamps, renumbering the shots
+  and choosing the join all belong to whoever is writing it.
+
+- **Seam warnings.** Cutting away from a window that ends on a `<cutoff>`
+  says so — the line is still running. The signal is one-way on purpose: a
+  `<cutoff>` proves two windows are connected, but nothing proves the
+  opposite, since a shot can carry on in silence. A cut after a resolved line
+  is ordinary and gets no comment.
+
+  Ticking a keyframe box on a later window explains the renumbering: picture
+  numbering restarts inside every window, so after an overlap the carried
+  frame is `<Picture 1>` and an end image is `<Picture 2>`, while after a
+  `/new_shot` the end image is `<Picture 1>` again.
+
+- **A subject library.** Name a subject, press **Save subject**, and the
+  character is written to `subjects/<name>.json` beside the plugin. Load it
+  back into any slot from the dropdown in that entry. Same rules as the
+  prompt library: nothing is written over without being asked, and a name
+  that could walk out of the folder becomes a plain file name instead.
+
+  Three things are deliberately not saved. The Ref2VA reference fields —
+  source, retention, what is retained, voice from, motion from — name assets
+  attached to one project, and carried into another they would point at
+  slots holding something else. The speaker ID describes the subject's part
+  in *this* prompt's action rather than anything about the character, so a
+  subject loaded into slot 3 keeps slot 3's existing ID instead of dragging
+  `(S1)` in on top of whoever already has it.
+
+  Saved by field name rather than by position, unlike the draft. The draft
+  is one rolling autosave of the whole form and naming its fields would be
+  another construction site to keep in step; a subject is twenty fields
+  written once, and naming them means a character saved today still loads
+  after the plugin gains a field.
+
+- **Task types are filled in from what the form already references.**
+  Reference task is a tab people never open if they are working only inside
+  the subject blocks, and an unticked task type is invisible until the
+  summary comes out without its prefix. Everything that tab asks for is
+  stated somewhere else already, so it is derived rather than remembered —
+  the same reasoning as the shot count and the speaker list.
+
+  A subject drawn from a picture or video, or given a motion reference,
+  implies reference generation; a voice reference implies an audio task; the
+  keyframe boxes imply keyframe completion; and a Reference sources row
+  implies whatever its role means — continued from, edited, keyframe, or a
+  plain reference. For audio the retention marker decides between reuse and
+  reference, since that is exactly the question of whether the clip itself
+  lands in the output.
+
+  **It unticks as well as ticks, but only ever what it ticked itself.** Pick
+  Picture 1 on a subject and reference generation appears; change your mind
+  and remove it and the tick goes with it, so the summary never claims a
+  reference that is no longer there. A box ticked by hand was never the
+  plugin's to begin with and is never touched — someone using WanGP's
+  Continue Video without declaring a row still gets to say so, and every
+  later edit leaves it alone.
+
+  What the sync last ticked is held in session state rather than in the
+  form, so nothing new is written to the draft and the flat list is
+  unchanged. After a page reload that set starts empty and the first sync
+  can only add; the existing "no task type" warning stays as the backstop
+  for that and for anything the derivation cannot see.
+
+- **A subject's voice can be taken from a video's soundtrack.** *Voice from*
+  offers the video slots alongside the audio ones. Picking a video means
+  "the soundtrack of that video", and the assembly resolves it to whichever
+  audio slot a Reference sources row says that soundtrack occupies — which
+  is what WanGP does underneath, spending an audio-reference slot on it.
+
+  The label written is always an `<Audio N>`, and it says where it came
+  from: `<Audio 1> is the voice-timbre reference for <Subject 1> (S1), taken
+  from <Video 1>`. The guide gives `<Audio N>` to audio referenced for
+  voice and numbers it independently of video, so a `<Video N>` there would
+  not be read as an audio reference at all.
+
+  Which slot the soundtrack occupies is worked out rather than asked for.
+  WanGP's validator, in soundtrack mode, spends one audio slot per
+  reference video and walks them in order, so `<Video 2>`'s soundtrack is
+  `<Audio 2>`. That is a default and not a rule — a Reference sources row
+  naming a different slot wins, quietly, because whoever is looking at the
+  WanGP panel knows better than the assumption does. Nothing is blocked and
+  no mismatch is warned about.
+
+- **One duty stated twice is stated once.** Naming an asset on a subject and
+  saying the same thing on a Reference sources row is one claim arriving by
+  two routes, so the merged line no longer reads "the appearance and content
+  reference for `<Subject 1>` (S1) and the appearance and content
+  reference".
+
+- **A subject can be drawn from a video.** *Source asset* offers the video
+  slots alongside the pictures. The guide treats a video used only for
+  appearance as reference generation rather than editing, and says visible
+  content taken from a video still receives `<Subject N>` labels.
+
+### Changed
+
+- **The window length box moved** out of *Scene* to just above the insert
+  buttons, and is now labelled *Length of this window*. Scene holds what is
+  true of the whole clip; this is per-window, and you rarely know it until the
+  action is written. The flat list is untouched — where a field is built has
+  nothing to do with where it sits in that list.
+
+- **The Source video block is now Reference sources**, and labels belong to
+  the asset rather than to the job. `<Video 1>` means *the first video I
+  attached*, whatever duties it ends up serving.
+
+  Declare each attachment once — which slot, what it does, what it
+  contributes, its retention — and name the same slot twice to say one file
+  does two jobs. Duties a subject owns stay on the subject and feed the same
+  registry, so a video named as a subject's appearance source, as that
+  subject's motion reference, and as a camera-structure row comes out as one
+  `<Video 1>` with all three duties joined, one definition line and one
+  retention line.
+
+  **This fixes a real bug.** The old block minted `<Video 1>` from a counter
+  while a subject's *Motion from* used the slot name, so filling in both
+  produced two definitions of the same label that contradicted each other,
+  and two retention lines to match. The same was latent for `<Audio 1>`.
+
+- **A video's soundtrack is declared as an audio slot with an origin** —
+  `Audio 1`, taken from `Video 1` — which is what WanGP does underneath: it
+  spends one audio-reference slot per selected reference-video soundtrack,
+  and the soundtrack shares its video's uploaded file. The mutual-exclusion
+  warning now compares video-derived audio against standalone audio, since
+  H3's Audio References selector offers one or two standalone references
+  *or* video soundtracks, never a mix.
+
+- **Assets are ordered by number rather than by string**, so pictures come
+  before videos before audio and `Picture 10` no longer sorts between
+  `Picture 1` and `Picture 2`. Reference-mode prompts will list their assets
+  in a different order than before.
+
+- **Sections start closed.** The panel is long, and folding what you have
+  finished with beats scrolling past it — now it starts that way. Action
+  stays open, because it is the one field nobody skips and an all-closed
+  panel reads as empty on first run.
+
+- **The flat list is 108 fields, up from 91.** The Source video block gave
+  back five; the reference-source rows and their counter cost twenty-one,
+  and the scheduling switch one.
+  The subject library's controls are not in it — like the character creator,
+  they ride on their own buttons. A draft or saved prompt from 3.1.1 is
+  migrated rather than refused; see below.
+
+- **Saved prompts and drafts from 3.1.1 are carried forward rather than
+  refused.** The flat list is positional, so a form saved under a different
+  layout normally cannot be loaded at all — every value after the first
+  difference would land in the wrong field. But a layout change is not
+  always a content change, and everything the Source video block held has
+  somewhere to go in Reference sources, so a 3.1.1 save is upgraded on
+  load:
+  the video becomes a `<Video 1>` row and its audio an `<Audio 1>` row that
+  names the video it came from. The status line says it happened.
+
+  Recognition is by layout signature, not by length alone, and anything
+  unrecognised is still refused outright. A wrong guess here is silent.
+
+### Fixed
+
+- **A camera rig could end up in the shot.** The camera sentence appended the
+  rig as a bare prepositional phrase — `A medium-wide shot of a city street,
+  on an anamorphic lens, on a crane.` — with nothing saying the camera
+  exists. With no stated subject, the model attached it to the nearest thing
+  in the scene that could plausibly be on a crane, and put a crane in the
+  frame.
+
+  Framing and rig are now adjectives and the word *shot* is added once,
+  wherever the stack ends: after the framing alone, after the rig alone, or
+  after both. So *medium* and *hood-mounted* compose into `a medium
+  hood-mounted shot`, and the lens sits between that and what it is pointed
+  at:
+
+  ```
+  The camera cuts to a medium hood-mounted shot on a 35mm lens of a car
+  driving at speed.
+  ```
+
+  A rig cannot be read as scenery in that sentence, because it is describing
+  the shot rather than sitting in it. The **Framing** and **Rig** dropdowns
+  are reworded to match — *medium*, *wide*, *crane*, *dolly* — and the
+  movement sentence no longer repeats the rig.
+
+  Two- and three-shots are no longer offered. They only read correctly with
+  the number last — *a medium handheld three shot* — which the
+  framing-then-rig order cannot produce, and there are far too many
+  variations of them to enumerate. Both fields take typed values, so the
+  whole phrase goes into **Framing** instead and **Rig** is left alone. A full stop typed at the end
+  of the **Of** field is trimmed before the tail is appended, so a sentence
+  can no longer read `...without a scratch., on an anamorphic lens`.
+
+- **Removed the "keep the enhancer loaded" checkbox.** It did not do what it
+  said: the enhancer stayed resident either way, and ticking the box stopped
+  it being used.
+
+- **The builder appeared under models that are not MiniMax H3, and could
+  fail to appear under H3 itself.** Two separate causes.
+
+  The model check matched on `minimax` or `h3` separately, so `minimax_music3`
+  — a MiniMax model this builder has nothing to say about — counted as a
+  match. It now matches `minimax_h3`, which every H3 architecture carries and
+  nothing else does.
+
+  The visibility toggle read the model out of `state`, but the trigger it
+  fires from carries the model being switched *to* while `state` still holds
+  the one being switched *from*. That got the answer exactly backwards:
+  switching to H3 saw the outgoing model and hid the builder, switching away
+  from H3 saw H3 and showed it. The toggle now reads the trigger's own value
+  when it carries a model name, and falls back to `state` for the trigger
+  that does not.
+
+  The panel also started visible and only hid once the first model switch
+  fired the toggle, so it showed under whatever model was selected at
+  startup. It now decides at build time, from `last_model_type` in WanGP's
+  own `server_config.json` — which is what WanGP restores on startup. It
+  cannot ask the plugin API: `create_ui` runs while the Blocks are being
+  built and `on_model_change` does not fire until the page has loaded, so at
+  that point the plugin has not been told which model is selected.
+
+  If the startup model cannot be determined, or visibility cannot be wired
+  at all, the builder stays visible. Being unable to tell is not a reason to
+  hide — a builder that never appears is worse than one that appears where
+  it is not needed, and the toggle corrects the latter on the first model
+  change.
+
+- **A video supplying a subject's appearance was marked `weak_reference`**
+  when the subject's own *what is retained* was left blank. That marker means
+  loose inspiration, which is the opposite of lifting a character's face and
+  build from a video. The default for that role is now
+  `partially_preserved` — the character carries over, the surroundings do
+  not — and leaving the field blank says in the status line which marker was
+  assumed. A looser role, such as a camera-structure reference, still
+  defaults to `weak_reference`, which is what it means.
+
 ## [3.1.1] — 2026-08-24
 
 ### Changed

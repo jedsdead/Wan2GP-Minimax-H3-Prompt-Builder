@@ -10,8 +10,10 @@ Thumbs.db
 
 # Local working files written by the plugin, not part of the repo.
 # The draft is the rolling autosave and its one-deep rotation; prompts/ is
-# the named prompt library. Both are yours, not the plugin's.
+# the named prompt library and subjects/ the character library. All yours,
+# not the plugin's.
 h3_draft.json
 h3_draft.prev.json
 h3_draft.json.tmp
 prompts/
+subjects/

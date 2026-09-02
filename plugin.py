@@ -743,14 +743,48 @@ def _parse_audio_reply(raw):
 MAX_ENTRIES = 4      # cast and subjects are one list
 MAX_SPEAKERS = 6     # how many speaker slots the Speaker dropdown offers
 
+# How many reference-source rows the Reference sources section offers.
+# Duties a subject owns are declared on the subject, so this only has to
+# cover whole-asset ones - a continued video, a composition anchor, a
+# soundtrack. Four is comfortably more than a normal prompt uses.
+MAX_REFS = 4
+
 # Visibility updates _clear and _restore_draft return after the field values:
-# one per cast entry, one per entry's reference block, then the two audio
-# reference blocks and the summary block.
-CLEAR_GROUP_UPDATES = MAX_ENTRIES * 2 + 3
+# one per cast entry, one per entry's reference block, one per
+# reference-source row, then the two audio reference blocks and the summary
+# block.
+CLEAR_GROUP_UPDATES = MAX_ENTRIES * 2 + MAX_REFS + 3
 
 # How many saved prompts the Load dropdown offers. It is a shortcut, not a
 # file manager - the rest of the folder is reached through Load from file.
 PROMPT_LIST_LIMIT = 10
+
+# What a saved subject holds, by name.
+#
+# Named rather than positional, unlike the draft. The draft is one rolling
+# autosave of 107 fields and naming them would be another construction site
+# to keep in step; a subject is twenty fields written once, and naming them
+# means a character saved today still loads after the plugin gains a field.
+# For a library you build up over months that matters more than it does for
+# an autosave that is replaced every twenty seconds.
+#
+# Three things are deliberately absent. The Ref2VA reference fields - source,
+# retention, note, voice_from, motion_from - name assets attached to one
+# project, and carrying them into another would point at slots that hold
+# something else entirely. The speaker ID describes this subject's part in
+# this prompt's action rather than anything about the character, so a subject
+# loaded into slot 3 keeps slot 3's existing ID instead of dragging (S1) in
+# and colliding with whoever already has it.
+SUBJECT_FIELDS = [
+    "kind", "desc", "onscreen", "age", "gender", "pitch", "timbre",
+    "rate", "accent", "lang",
+    "use_creator", "char_name", "char_ethnicity", "char_gender", "char_age",
+    "char_height", "char_build", "char_hairstyle", "char_haircolor",
+    "char_eyecolor", "char_clothing",
+]
+
+# The same shortcut cap as prompts, for the same reason.
+SUBJECT_LIST_LIMIT = 10
 
 # How often the form is written to disk while you work, in seconds. Only
 # used when the installed Gradio has gr.Timer; otherwise the draft is saved
@@ -763,7 +797,32 @@ _DRAFT_CACHE = {"values": None}
 
 # Substrings that mark a model as MiniMax H3. Checked case-insensitively
 # against the model type reported by on_model_change.
-H3_MODEL_HINTS = ("minimax", "h3")
+# Substrings that mark a model as MiniMax H3, checked case-insensitively
+# against the model type WanGP reports.
+#
+# Deliberately the full "minimax_h3" rather than either half. Every H3
+# architecture is minimax_h3_ref2va or minimax_h3_fl2va, with _pruned and
+# _pdd variants, so the prefix catches all of them - while "minimax" alone
+# also matched minimax_music3, a MiniMax model this builder has nothing to
+# say about, and "h3" alone is loose enough to catch anything.
+H3_MODEL_HINTS = ("minimax_h3",)
+
+# H3's sliding-window figures, read out of WanGP rather than guessed at.
+# fps, frames_minimum and frames_steps come from the model definition in
+# models/minimax_h3/minimax_h3_handler.py; window_max and overlap_default
+# come from its sliding_window_defaults; the 4-15 second band is what
+# MiniMax's own documentation gives for a single window.
+#
+# These are advisory. Nothing here blocks an insert - a longer window may
+# degrade or run out of VRAM, but that is the user's call to make, and a
+# later model may widen the band or remove the problem entirely. When that
+# happens these five numbers are the only edit: every warning and every
+# emitted command reads them from here.
+H3_FPS = 24
+H3_WINDOW_FRAMES_MIN = 107            # 4.46s - one window cannot be shorter
+H3_WINDOW_FRAMES_MAX = 481            # 20.04s - the Sliding Window Size cap
+H3_WINDOW_DOC_SECONDS = (4.0, 15.0)   # the documented band
+H3_OVERLAP_DEFAULT = 18               # overlap_default; the ladder is 17k+1
 
 
 # =============================================================================
@@ -854,15 +913,21 @@ STYLES = [
     "3D CG", "Photorealistic render", "Low-poly render", "Wireframe render",
 ]
 
+# Framing as a bare adjective. The word "shot" is added once, after the rig,
+# so "medium" and "crane" compose into "a medium crane shot" rather than the
+# two of them being bolted together with a preposition.
+#
+# Two- and three-shots are deliberately absent. They only read correctly with
+# the number last - "a medium handheld three shot" - which the framing-then-
+# rig order cannot produce, and there are far too many variations of them to
+# enumerate anyway. The field takes typed values, so the whole phrase goes in
+# here instead: type "medium handheld three" and leave Rig alone.
 FRAMINGS = [
-    "", "an extreme close-up", "a close-up", "a medium close-up",
-    "a medium shot", "a medium-wide shot", "a wide shot",
-    "an extreme wide shot", "an establishing shot", "a two-shot",
-    "a three-shot", "an over-the-shoulder shot", "a low-angle shot",
-    "a high-angle shot", "an overhead shot", "a worm's-eye view",
-    "a dutch-angle shot", "a point-of-view shot", "a profile shot",
-    "a silhouette shot", "an insert shot", "a cutaway", "a master shot",
-    "a reflection shot", "a through-the-window shot",
+    "", "extreme close-up", "close-up", "medium close-up", "medium",
+    "medium-wide", "wide", "extreme wide", "establishing",
+    "over-the-shoulder", "low-angle", "high-angle", "overhead", "worm's-eye",
+    "dutch-angle", "point-of-view", "profile", "silhouette", "insert",
+    "cutaway", "master", "reflection", "through-the-window",
 ]
 
 # Fixed vocabulary from the guide's camera table. Not user-extendable:
@@ -914,13 +979,15 @@ MOTION_VERBS = {
 
 # How the camera is mounted. Written as a trailing clause on the camera
 # sentence: "The camera pushes in slowly, mounted on a drone."
+# Rigs as adjectives too, for the same reason. "A medium shot, on a crane"
+# put a crane in the frame - the phrase had no stated subject, so the model
+# attached it to the scene. "A medium crane shot" cannot be read that way,
+# because the rig is describing the shot rather than sitting in it.
 RIGS = [
-    "", "on a tripod", "handheld", "on a shoulder rig", "on a steadicam",
-    "on a gimbal", "on a dolly track", "on a crane", "on a jib arm",
-    "on a drone", "on a cable cam", "on a car mount", "on a hood mount",
-    "on a slider", "on a motion-control rig", "in an underwater housing",
-    "body-mounted to the subject", "mounted to a moving vehicle",
-    "hand-passed between operators", "on a rickshaw rig",
+    "", "tripod", "handheld", "shoulder-rig", "steadicam", "gimbal", "dolly",
+    "crane", "jib", "drone", "cable-cam", "car-mounted", "hood-mounted",
+    "slider", "motion-control", "underwater", "body-mounted",
+    "vehicle-mounted", "rickshaw",
 ]
 
 AMPLITUDES = ["", "with small amplitude", "with large amplitude"]
@@ -1065,6 +1132,72 @@ REF_AUDIO_SLOTS = ["", "Audio 1", "Audio 2"]
 # _ref_tags() adds the angle brackets on the way out.
 REF_PICTURE_SLOTS = [f"Picture {n + 1}" for n in range(9)]
 
+# Every slot an asset can occupy, for the Reference sources section. A label
+# belongs to the *asset*, not to the job it does: <Video 1> means "the first
+# video I attached", whatever duties it ends up serving. Naming the same slot
+# twice is how you say one file does two jobs, and the assembly merges those
+# duties into one definition and one retention line rather than treating them
+# as two assets.
+REF_ALL_SLOTS = ([""] + REF_PICTURE_SLOTS
+                 + REF_VIDEO_SLOTS[1:] + REF_AUDIO_SLOTS[1:])
+
+# Whether a reference video's soundtrack takes the audio slot matching its
+# own number - <Video 2>'s soundtrack being <Audio 2>.
+#
+# Read out of WanGP's H3 validator, which in soundtrack mode sets
+# audio_count to the number of reference videos and walks them in order,
+# requiring each to have an audio track. Its selector also offers standalone
+# audio references and video soundtracks as separate choices rather than a
+# combination, so today the mapping is one-to-one and positional.
+#
+# A default, not a rule. The underlying field is a letter set that could
+# hold a combination the dropdown does not currently offer, and this plugin
+# writes prompt text - it is in no position to enforce anything about what
+# gets selected in WanGP. A Reference sources row that names a different
+# slot wins, silently: whoever is looking at the panel knows better than
+# this constant does.
+SOUNDTRACK_FOLLOWS_VIDEO_ORDER = True
+
+# What a subject's voice can be taken from. A voice reference is always an
+# <Audio N> - the guide gives that label to audio referenced for voice, and
+# numbers it independently of video - but a reference video's soundtrack is
+# a perfectly ordinary source for one, and WanGP spends an audio-reference
+# slot on it. Picking a video here means "the soundtrack of that video", and
+# the assembly resolves it to whichever audio slot a Reference sources row
+# says it occupies.
+VOICE_SOURCE_SLOTS = REF_AUDIO_SLOTS + REF_VIDEO_SLOTS[1:]
+
+# What a subject's appearance can be taken from. Pictures, and now videos:
+# the guide treats a video used only for appearance as reference generation
+# rather than editing, and says visible content taken from a video still
+# receives <Subject N> labels.
+SUBJECT_SOURCE_SLOTS = REF_PICTURE_SLOTS + REF_VIDEO_SLOTS[1:]
+
+# Whole-asset duties, for the Reference sources section. Duties a *subject*
+# owns - its voice, its motion, its appearance - stay in the subject's own
+# block, because they belong to the subject rather than to the file. Both
+# routes feed the same registry, so a slot named in both merges.
+#
+# Each entry maps the visible label to the kind of slot it belongs on and the
+# phrase the definition line uses.
+REF_ROLE_PHRASES = {
+    "continued from":               ("Video", "the video this one continues from"),
+    "edited":                       ("Video", "the video being edited"),
+    "camera and cutting structure": ("Video", "the camera and cutting-structure reference"),
+    "motion and rhythm":            ("Video", "the motion and rhythm reference"),
+    "appearance and content":       ("Video", "the appearance and content reference"),
+    "keyframe":                     ("Picture", "a keyframe"),
+    "composition anchor":           ("Picture", "the composition anchor"),
+    "storyboard frame":             ("Picture", "a storyboard frame"),
+    "edited frame":                 ("Picture", "the frame being edited"),
+    "appearance reference":         ("Picture", "an appearance reference"),
+    "soundtrack":                   ("Audio", "the soundtrack reference"),
+    "dialogue":                     ("Audio", "the dialogue reference"),
+    "sound effects":                ("Audio", "the sound-effects reference"),
+}
+
+REF_ROLES = [""] + list(REF_ROLE_PHRASES)
+
 GRADING = [
     "", "a vibrant colour grade", "a muted colour grade",
     "a high-contrast grade", "a low-contrast grade",
@@ -1094,6 +1227,14 @@ AUDIO_RETENTION = ["fully_copy", "partially_copy", "reference", "weak_reference"
 
 # Combined for the subject dropdown, deduped - weak_reference is in both.
 ALL_RETENTION = list(dict.fromkeys(VISUAL_RETENTION + AUDIO_RETENTION))
+
+# What to assume when a subject is drawn from a video but its own retention
+# marker is left blank. The general fallback for an asset is weak_reference,
+# which is right for something that only nudges the generation - a camera
+# reference, say - and wrong for a video a character's face and build are
+# being lifted from. partially_preserved says the character carries over
+# while the surroundings do not, which is what that role means.
+APPEARANCE_RETENTION = "partially_preserved"
 
 TASK_TYPES = ["keyframe completion", "reference generation", "video editing",
               "video continuation", "audio reuse", "audio reference"]
@@ -1304,7 +1445,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 options = [""] + options
             return gr.Dropdown(options, label=label, value="", **kw)
 
+        # Hidden from the start unless WanGP is opening on an H3 model. The
+        # old default was visible, so the builder showed under whatever model
+        # was selected at startup until the first switch fired the toggle.
+        start_visible = self._starts_visible()
+
         with gr.Accordion("MiniMax H3 Prompt Builder", open=False,
+                          visible=start_visible,
                           elem_id="h3_prompt_builder") as root:
 
             model_warning = gr.Markdown(visible=False)
@@ -1356,7 +1503,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # only the defaults - Gradio remembers nothing between sessions,
             # so they are set to what a first build needs rather than to
             # what is used most.
-            with gr.Accordion("Mode & keyframes", open=True):
+            with gr.Accordion("Mode & keyframes", open=False):
                 gr.Markdown(KEYFRAME_NOTE)
 
                 with gr.Row():
@@ -1371,7 +1518,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                          "written.",
                 )
 
-            with gr.Accordion("Scene", open=True):
+            with gr.Accordion("Scene", open=False):
                 gr.Markdown(
                     "What holds for the whole clip. These become the single "
                     "opening sentence before `[Shot 1]`. Lens and rig are "
@@ -1379,9 +1526,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     "since both commonly change at a cut."
                 )
                 with gr.Row():
-                    duration = gr.Number(
-                        label="Duration of this window (seconds)",
-                        value=8.0, minimum=0.5, step=0.5)
                     style = dd(STYLES, "Style")
                     grading = dd(GRADING, "Colour grade")
 
@@ -1401,7 +1545,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             # ---- source video (FL2VA continue / Ref2VA video reference) ----
             # ---- cast and subjects (one list) ------------------------------
-            with gr.Accordion("Cast & subjects", open=True):
+            with gr.Accordion("Cast & subjects", open=False):
                 gr.Markdown(
                     "Everything that appears - people, animals, places, props. "
                     "Each entry becomes a `<Subject N>` definition, and the "
@@ -1422,6 +1566,25 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     # a screen, and only the one being edited needs to be.
                     with gr.Accordion(f"Subject {i + 1}", open=True,
                                       visible=False) as grp:
+                        # A character is worth more than the prompt it was
+                        # written for. Saved by name, and never carrying the
+                        # reference assets or the speaker ID - those belong
+                        # to the project rather than to the character.
+                        with gr.Row():
+                            e_lib_name = gr.Textbox(
+                                label="Save this subject as", scale=2,
+                                placeholder="Marcus, the fishmonger",
+                            )
+                            e_lib_save = gr.Button("Save subject", size="sm")
+                        with gr.Row():
+                            e_lib_pick = gr.Dropdown(
+                                self._subject_choices(), label="Load a subject",
+                                value=None, allow_custom_value=True, scale=2,
+                            )
+                            e_lib_load = gr.Button("Load subject", size="sm")
+                            e_lib_refresh = gr.Button("Refresh subjects", size="sm")
+                        e_lib_status = gr.Markdown("")
+
                         e_use_creator = gr.Checkbox(
                             label="Use character creator", value=False,
                         )
@@ -1492,11 +1655,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         with gr.Group(visible=False) as e_ref_block:
                             with gr.Row():
                                 e_source = gr.Dropdown(
-                                    REF_PICTURE_SLOTS, label="Source asset",
+                                    SUBJECT_SOURCE_SLOTS, label="Source asset",
                                     value=[], multiselect=True,
                                     allow_custom_value=True,
-                                    info="Which reference image this comes "
-                                         "from - type another tag if needed",
+                                    info="Which reference image or video this "
+                                         "subject comes from - type another "
+                                         "tag if needed",
                                 )
                                 e_retention = gr.Dropdown(
                                     [""] + ALL_RETENTION, label="Retention",
@@ -1513,10 +1677,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 # renumbered or deleted by hand.
                             with gr.Row():
                                 e_voice_from = gr.Dropdown(
-                                    REF_AUDIO_SLOTS, label="Voice from",
-                                    value="",
+                                    VOICE_SOURCE_SLOTS, label="Voice from",
+                                    value="", allow_custom_value=True,
                                     info="A reference audio supplying this "
-                                         "speaker's timbre",
+                                         "speaker's timbre - or a video, if "
+                                         "its soundtrack is declared in "
+                                         "Reference sources",
                                 )
                                 e_motion_from = gr.Dropdown(
                                     REF_VIDEO_SLOTS, label="Motion from",
@@ -1549,6 +1715,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                         "note": e_note,
                         "voice_from": e_voice_from,
                         "motion_from": e_motion_from,
+                        "lib_name": e_lib_name, "lib_save": e_lib_save,
+                        "lib_pick": e_lib_pick, "lib_load": e_lib_load,
+                        "lib_refresh": e_lib_refresh,
+                        "lib_status": e_lib_status,
                     })
 
                 with gr.Row():
@@ -1576,36 +1746,100 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     TASK_TYPES, label="Task type - combined with + in summary",
                 )
 
-                with gr.Accordion("Source video", open=False) as video_section:
-                    video_role = gr.Radio(
-                        ["none", "continue from it", "edit it",
-                         "reference its camera and cutting only"],
-                        label="Role of an attached video", value="none",
-                    )
-                    video_desc = gr.Textbox(
-                        label="What the video contributes",
-                        placeholder="the original camera movement and the pace of the cuts",
-                    )
-                    video_retention = locked_dd(VISUAL_RETENTION,
-                                                "Retention (picture)")
-
+                with gr.Accordion("Reference sources", open=False) as video_section:
                     gr.Markdown(
-                        "If the video's **audio** is being reused or referenced, "
-                        "set it below - audio uses a different marker set from "
-                        "picture, and gets its own <Audio N> label. Tick the "
-                        "matching task type (audio reuse, or audio reference).\n\n"
-                        "WanGP's Audio References selector is one dropdown, so "
-                        "**Use Reference-Video Soundtrack(s)** and standalone "
-                        "audio references are mutually exclusive - use this "
-                        "section or the audio slots, not both."
+                        "Declare each file you attached in WanGP, once, and "
+                        "say what job it does. A label belongs to the "
+                        "**asset**, not to the job - `<Video 1>` means *the "
+                        "first video I attached*, whatever it ends up doing. "
+                        "Name the same slot on two rows and its duties merge "
+                        "into one definition and one retention line, which is "
+                        "how you say one file does two jobs.\n\n"
+                        "Duties a **subject** owns - its voice, its motion, "
+                        "its appearance - go on the subject instead, in Cast "
+                        "& subjects. Those feed the same registry, so a slot "
+                        "named in both merges too.\n\n"
+                        "**Taken from** is how a video's soundtrack is "
+                        "declared: `Audio 1`, taken from `Video 1`. WanGP's "
+                        "Audio References selector offers one or two "
+                        "standalone audio references *or* reference-video "
+                        "soundtracks, never a mix."
                     )
                     with gr.Row():
-                        video_audio = locked_dd(AUDIO_RETENTION,
-                                                "Retention (audio)")
-                        video_audio_desc = gr.Textbox(
-                            label="What the audio contributes",
-                            placeholder="the original market ambience and the fishmonger's dialogue",
+                        ref_count = gr.Number(
+                            label="Reference sources", value=0, precision=0,
+                            minimum=0, maximum=MAX_REFS, interactive=False,
                         )
+                        add_ref = gr.Button("Add source", size="sm")
+                        rm_ref = gr.Button("Remove last source", size="sm")
+
+                    refs = []
+                    for i in range(MAX_REFS):
+                        with gr.Group(visible=False) as ref_group:
+                            with gr.Row():
+                                r_slot = gr.Dropdown(
+                                    REF_ALL_SLOTS, label=f"Source {i + 1}",
+                                    value="", allow_custom_value=True,
+                                    info="Which attached file this is",
+                                )
+                                r_role = gr.Dropdown(
+                                    REF_ROLES, label="What it does",
+                                    value="", allow_custom_value=True,
+                                )
+                            with gr.Row():
+                                r_desc = gr.Textbox(
+                                    label="What it contributes",
+                                    placeholder="the original camera movement "
+                                                "and the pace of the cuts",
+                                )
+                            with gr.Row():
+                                r_retention = gr.Dropdown(
+                                    [""] + ALL_RETENTION, label="Retention",
+                                    value="",
+                                    info="Picture markers for pictures and "
+                                         "video, audio markers for audio",
+                                )
+                                r_from = gr.Dropdown(
+                                    REF_ALL_SLOTS, label="Taken from (optional)",
+                                    value="", allow_custom_value=True,
+                                    info="For a soundtrack or a frame lifted "
+                                         "out of another asset",
+                                )
+                        refs.append({
+                            "group": ref_group, "slot": r_slot,
+                            "role": r_role, "desc": r_desc,
+                            "retention": r_retention, "from": r_from,
+                        })
+
+                    _ref_out = [ref_count] + [r["group"] for r in refs]
+                    add_ref.click(
+                        fn=lambda n: self._step_count(n, +1, MAX_REFS),
+                        inputs=[ref_count], outputs=_ref_out,
+                    )
+                    rm_ref.click(
+                        fn=lambda n: self._step_count(n, -1, MAX_REFS),
+                        inputs=[ref_count], outputs=_ref_out,
+                    )
+
+            # The subject library, one set of controls per entry. Driven off
+            # SUBJECT_FIELDS so save, load and this wiring cannot disagree
+            # about the order - the failure mode the flat list already
+            # taught us to design out.
+            for e in entries:
+                fields = [e[name] for name in SUBJECT_FIELDS]
+                e["lib_save"].click(
+                    fn=self._save_subject,
+                    inputs=[e["lib_name"]] + fields,
+                    outputs=[e["lib_pick"], e["lib_status"]],
+                )
+                e["lib_load"].click(
+                    fn=self._load_subject, inputs=[e["lib_pick"]],
+                    outputs=fields + [e["creator_block"], e["lib_status"]],
+                )
+                e["lib_refresh"].click(
+                    fn=self._refresh_subjects, inputs=[],
+                    outputs=[e["lib_pick"], e["lib_status"]],
+                )
 
 
             with gr.Accordion("Action", open=True):
@@ -1782,14 +2016,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     suggest_sound_btn = gr.Button("Suggest a soundscape",
                                                   size="sm")
                     suggest_music_btn = gr.Button("Suggest a score", size="sm")
-                enhancer_keep = gr.Checkbox(
-                    label="Keep the enhancer loaded between presses",
-                    value=ENHANCER_KEEP_LOADED,
-                    info="Much faster on the second press, but it holds "
-                         "several GB the video model may want. Only applies "
-                         "to a copy this plugin loaded itself - an enhancer "
-                         "borrowed from WanGP is WanGP's to release",
-                )
                 audio_status = gr.Markdown("")
                 gr.Markdown(
                     "Reads the scene and the action above and asks WanGP's "
@@ -1805,7 +2031,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             status = gr.Markdown("")
 
-            with gr.Accordion("Summary", open=True,
+            with gr.Accordion("Summary", open=False,
                               visible=False) as summary_block:
                 gr.Markdown(
                     "The summary is a reference-mode section. Base modes have "
@@ -1831,31 +2057,62 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "takes seconds and the model reads what you leave."
             )
 
+            # Duration lives down here rather than up in Scene, which holds
+            # what is true of the whole clip - this is per-window, and you
+            # rarely know it until the action is written. Where a field is
+            # built has nothing to do with where it sits in the flat input
+            # list below, so moving it here costs nothing: the flat list,
+            # _unpack, _clear and _restore_draft are all untouched.
+            with gr.Row():
+                duration = gr.Number(
+                    label="Length of this window (seconds)",
+                    value=8.0, minimum=0.5, step=0.5,
+                )
+                window_commands = gr.Checkbox(
+                    label="Write scheduling into the prompt",
+                    value=False,
+                    info="Adds /duration, and /overlap or /new_shot on the "
+                         "appends. These override Sliding Window Size and "
+                         "Number of frames. Leave off to drive it all from "
+                         "WanGP's own sliders.",
+                )
+
             with gr.Row():
                 insert_btn = gr.Button("Insert into prompt", variant="primary")
-                append_btn = gr.Button("Insert as sliding window")
+            with gr.Row():
+                append_cont_btn = gr.Button("Append continuing window")
+                append_cut_btn = gr.Button("Append as new shot")
             with gr.Row():
                 clear_action_btn = gr.Button("Clear the action")
                 clear_btn = gr.Button("Clear all fields")
 
             gr.Markdown(
-                "**Insert into prompt** replaces the prompt box. **Insert as "
-                "sliding window** appends this prompt below what is already "
-                "there, separated by a blank line - build one window, insert "
-                "it, then write the next. For that to work, set *How to "
-                "Process each Line of the Text Prompt* to the paragraph-per-"
-                "sliding-window option; on the default queue setting each "
-                "window becomes a separate job."
+                "**Insert into prompt** replaces the box. The two **Append** "
+                "buttons add this window below what is already there, "
+                "separated by a blank line - build one window, append it, "
+                "then write the next. Which one you press decides how the "
+                "windows meet: **continuing** carries the closing frames and "
+                "audio of the previous window over as conditioning, for when "
+                "the action runs straight on; **new shot** carries nothing, "
+                "for a hard cut to somewhere else. This is separate from a "
+                "cut *inside* a window, which is what a second `[Shot 2]` "
+                "with a timestamp already does.\n\n"
+                "For any of it to work, set *How to Process each Line of the "
+                "Text Prompt* to the paragraph-per-sliding-window option; on "
+                "the default queue setting each window becomes a separate job."
             )
 
         # ---- wiring -------------------------------------------------------
 
         flat = [start_image, end_image,
-                ref_mode, duration, style, grading,
+                ref_mode, duration, window_commands, style, grading,
                 location, time_of_day, lighting, atmosphere,
                 camera_type,
-                video_role, video_desc, video_retention,
-                video_audio, video_audio_desc, entry_count]
+                ref_count]
+        for r in refs:
+            flat += [r["slot"], r["role"], r["desc"], r["retention"],
+                     r["from"]]
+        flat += [entry_count]
         for e in entries:
             flat += [e["kind"], e["desc"], e["speaker"], e["onscreen"],
                      e["age"], e["gender"], e["pitch"], e["timbre"],
@@ -1899,20 +2156,25 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # The enhancer switch rides on the end of the list, like every other
         # button's own controls.
         suggest_sound_btn.click(
-            fn=self._suggest_soundscape, inputs=flat + [enhancer_keep],
+            fn=self._suggest_soundscape, inputs=flat,
             outputs=[soundscape, audio_status],
         )
         suggest_music_btn.click(
-            fn=self._suggest_music, inputs=flat + [enhancer_keep],
+            fn=self._suggest_music, inputs=flat,
             outputs=[music, audio_status],
         )
 
         insert_btn.click(fn=self._build, inputs=flat,
                          outputs=[self.prompt, status])
 
-        append_btn.click(fn=self._append_window,
-                         inputs=[self.prompt] + flat,
-                         outputs=[self.prompt, status])
+        # Two buttons rather than a join field: they stay out of the flat
+        # list, so the count and the four sites that read it do not move.
+        append_cont_btn.click(fn=self._append_continuing,
+                              inputs=[self.prompt] + flat,
+                              outputs=[self.prompt, status])
+        append_cut_btn.click(fn=self._append_cut,
+                             inputs=[self.prompt] + flat,
+                             outputs=[self.prompt, status])
 
         # One switch for everything Ref2VA. Values in a hidden block are
         # ignored by the assembly too, so nothing can leak in.
@@ -1929,11 +2191,38 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             fn=self._draft_summary, inputs=flat,
             outputs=[summary_text, summary_status],
         )
+        # Order matters: this has to match the order _clear and _apply_saved
+        # return their visibility updates in.
         all_groups = (
             [e["group"] for e in entries]
             + [e["ref_block"] for e in entries]
+            + [r["group"] for r in refs]
             + [ambience_ref_block, music_ref_block, summary_block]
         )
+
+        # Reference task is a tab people never open if they are working only
+        # inside the subject blocks, and an unticked task type is invisible
+        # until the summary comes out without its prefix. So every control
+        # that implies one keeps it in step.
+        #
+        # Deliberately not wired to task_types itself: the handler writes to
+        # that box, and a change event on it would feed straight back.
+        # What the last sync ticked, so a later one can untick exactly what
+        # it put there and nothing else. Session plumbing, not a field: it
+        # never enters the flat list or the draft.
+        derived_tasks = gr.State([])
+
+        task_triggers = [start_image, end_image, ref_mode, ref_count]
+        for r in refs:
+            task_triggers += [r["slot"], r["role"], r["retention"]]
+        for e in entries:
+            task_triggers += [e["source"], e["voice_from"], e["motion_from"]]
+        task_triggers += [ambience_from, ambience_retention,
+                          music_from, music_retention]
+        for control in task_triggers:
+            control.change(fn=self._sync_tasks,
+                           inputs=[derived_tasks] + flat,
+                           outputs=[task_types, derived_tasks])
 
         # The presets fill the boxes and are not read anywhere else, so they
         # stay out of the flat list - like the camera and dialogue controls,
@@ -1993,7 +2282,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             button.click(fn=self._save_draft, inputs=flat,
                          outputs=[draft_status])
 
-        insert_btn.click(fn=self._autosave, inputs=flat,
+        for button in (insert_btn, append_cont_btn, append_cut_btn):
+            button.click(fn=self._autosave, inputs=flat,
                          outputs=[draft_status])
 
         # Character-creator fields aren't part of _build/_clear's flat list
@@ -2044,6 +2334,58 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         self._wire_model_visibility(root, model_warning)
 
+    @staticmethod
+    def _startup_model_type():
+        """
+        The model WanGP is about to open with, read from its own settings.
+
+        create_ui runs while the Blocks are being built, and on_model_change
+        does not fire until the page has loaded, so at build time the plugin
+        has not been told which model is selected. Starting hidden on that
+        basis meant the builder was missing whenever WanGP opened straight
+        onto an H3 model, and only appeared once you switched away and back.
+
+        server_config.json holds last_model_type, which is exactly what
+        WanGP restores on startup. Read from disk rather than by importing
+        wgp: it is a settings file rather than an internal, and the plugin
+        is in no position to reach into the host's globals.
+
+        Returns "" if it cannot be found, and the caller treats that as
+        "show the builder" - being unable to tell is not a reason to hide.
+        """
+        for folder in Path(__file__).resolve().parents:
+            candidate = folder / "server_config.json"
+            if candidate.is_file():
+                try:
+                    blob = json.loads(candidate.read_text(encoding="utf-8"))
+                    return str(blob.get("last_model_type") or "")
+                except Exception:                     # noqa: BLE001
+                    return ""
+        return ""
+
+    def _starts_visible(self):
+        """
+        Whether the builder should be on screen before anything has fired.
+
+        Hidden only when the startup model is known and is not H3. If the
+        model cannot be determined, or visibility cannot be wired at all,
+        it stays visible - a builder that never appears is worse than one
+        that appears where it is not needed, and the toggle corrects the
+        latter on the first model change.
+        """
+        if not self._can_wire_visibility():
+            return True
+        startup = self._startup_model_type() or self.current_model_type
+        if not startup:
+            return True
+        return any(h in startup.lower() for h in H3_MODEL_HINTS)
+
+    def _can_wire_visibility(self):
+        """Whether the pieces the visibility toggle needs are all present."""
+        return bool(getattr(self, "state", None)) and any(
+            getattr(self, name, None) is not None
+            for name in ("refresh_form_trigger", "model_choice_target"))
+
     def _wire_model_visibility(self, root, warning):
         """
         Hide the builder unless a MiniMax H3 model is selected.
@@ -2070,9 +2412,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                   "the builder will stay visible for every model.")
             return
 
-        def _toggle(st):
-            model_type = ""
-            if isinstance(st, dict):
+        def _toggle(fired, st):
+            # model_choice_target holds the model being switched *to*, and
+            # fires before the switch happens - at which point state still
+            # holds the model being switched *from*. Reading state there got
+            # the answer exactly backwards: switching to H3 saw the old
+            # model and hid the builder, switching away from H3 saw H3 and
+            # showed it. So the trigger's own value wins when it carries a
+            # model id.
+            #
+            # refresh_form_trigger carries a counter rather than a name,
+            # which is what the letter test sorts out; that path falls
+            # through to state, which by then has been updated.
+            seen = str(fired or "")
+            model_type = seen if any(c.isalpha() for c in seen) else ""
+            if not model_type and isinstance(st, dict):
                 model_type = str(st.get("model_type", "") or "")
             model_type = model_type or self.current_model_type
             is_h3 = any(h in model_type.lower() for h in H3_MODEL_HINTS)
@@ -2080,7 +2434,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         for trigger in triggers:
             try:
-                trigger.change(fn=_toggle, inputs=[state],
+                trigger.change(fn=_toggle, inputs=[trigger, state],
                                outputs=[root, warning])
             except Exception as exc:
                 print(f"[H3PromptBuilder] visibility trigger not wired: {exc}")
@@ -2276,6 +2630,47 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return [n] + [gr.update(visible=(i < n)) for i in range(maximum)]
 
     @classmethod
+    def _slot_list(cls, value):
+        """
+        A multiselect source field as a list of bare slot names.
+
+        The field accepts a list from the dropdown or a typed string, and
+        entries may already be wrapped in angle brackets, so all three forms
+        come back the same way.
+        """
+        if isinstance(value, (list, tuple)):
+            parts = [str(v) for v in value]
+        else:
+            parts = (cls._s(value) or "").split(",")
+        return [p.strip().strip("<>") for p in parts if p and p.strip()]
+
+    @staticmethod
+    def _slot_kind(slot):
+        """
+        Which asset family a slot name belongs to.
+
+        Read off the name rather than tracked, because the name is what the
+        user picked and what the prompt will say. An unrecognised name is
+        treated as a picture, which is the marker set most references use.
+        """
+        head = (slot or "").strip("<>").split()[0].lower() if slot else ""
+        return {"video": "video", "audio": "audio",
+                "picture": "picture"}.get(head, "picture")
+
+    @classmethod
+    def _slot_order(cls, slot):
+        """
+        Sort assets by family, then by number rather than by string.
+
+        Plain sorting puts "Picture 10" between "Picture 1" and "Picture 2",
+        which reads as a mistake in a finished prompt.
+        """
+        kind = cls._slot_kind(slot)
+        rank = {"picture": 0, "video": 1, "audio": 2}.get(kind, 3)
+        digits = "".join(c for c in (slot or "") if c.isdigit())
+        return (rank, int(digits) if digits else 0, slot or "")
+
+    @classmethod
     def _ref_tags(cls, text):
         """
         Normalise a source-asset field into angle-bracket tags.
@@ -2316,6 +2711,131 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         minutes = int(total // 60)
         rest = total - minutes * 60
         return f"{minutes:02d}:{rest:06.3f}"
+
+    @staticmethod
+    def _window_seconds(duration):
+        """The duration field as a positive float, or None if unusable."""
+        try:
+            secs = float(duration)
+        except (TypeError, ValueError):
+            return None
+        return secs if secs > 0 else None
+
+    @staticmethod
+    def _secs_text(secs):
+        """8.0 -> '8', 7.5 -> '7.5'. WanGP parses the seconds form as a
+        float, so there is nothing to round to."""
+        return f"{secs:.3f}".rstrip("0").rstrip(".")
+
+    @classmethod
+    def _window_command(cls, duration, join=None, enabled=True):
+        """
+        The `[/...]` block WanGP reads at the head of a window's paragraph.
+
+        WanGP strips the block before the model sees it, so this is
+        scheduling instruction rather than prompt text. Three things about
+        it are worth knowing:
+
+        - It goes on every window, including a single one. WanGP pads the
+          video out to Number of frames by repeating the last paragraph
+          only when *no* window carries a `/duration`, so all or none are
+          the only safe choices and all is the one that honours the field.
+        - It overrides both Sliding Window Size and Number of frames for
+          the generation, and is capped by neither.
+        - `join` is left off the first window. Its overlap is clamped to
+          whatever a start image or Continue Video source provides, which
+          on plain text-to-video is nothing, so a command there would
+          imply a control the prompt does not have.
+
+        The overlap is written out as a number rather than as a bare
+        `[/overlap]`, which would mean "whatever the slider says" and
+        leave a saved prompt at the mercy of a setting changed months
+        later.
+        """
+        # Off by default. These commands override WanGP's own sliders, and
+        # taking that over should be something asked for rather than
+        # something that happens because the plugin was used.
+        if not enabled:
+            return ""
+        secs = cls._window_seconds(duration)
+        if secs is None:
+            return ""
+        parts = [f"/duration={cls._secs_text(secs)}s"]
+        if join == "continue":
+            parts.append(f"/overlap={H3_OVERLAP_DEFAULT}")
+        elif join == "cut":
+            # /new_shot is an alias for /overlap=0. A cut with overlap is
+            # not expressible, and should not be: the overlap frames are
+            # the previous window's closing frames handed to the model as
+            # picture and audio conditioning, so asking it to cut away
+            # from them at the same time is a contradiction.
+            parts.append("/new_shot")
+        return "[" + ",".join(parts) + "]"
+
+    @classmethod
+    def _shot_boundaries(cls, action):
+        """
+        Timestamps that open a `[Shot N]`, offered as candidate split
+        points when a window is long.
+
+        Where a split actually goes is a creative decision, and rebasing
+        the timestamps, renumbering the shots and deciding whether the new
+        join is a continuation or a cut all belong to whoever is writing
+        it. So this points at the boundaries and stops there.
+        """
+        text = action or ""
+        found = []
+        for m in _ACTION_SHOT_RE.finditer(text):
+            stamp = _ACTION_TIME_RE.match(text[m.end():m.end() + 40].lstrip())
+            if stamp:
+                mark = f"{stamp.group(1)}:{stamp.group(2)}"
+                if mark not in found:
+                    found.append(mark)
+        return found
+
+    @classmethod
+    def _window_warnings(cls, duration, action=""):
+        """
+        What this window's length means for H3, with the arithmetic shown.
+
+        Advisory, like everything else here. These are the current model's
+        limits, not the parser's - `/duration` has no ceiling at all - so a
+        long window is a decision about quality and VRAM rather than
+        something that can be got wrong. Saying so with the numbers
+        attached beats refusing.
+        """
+        secs = cls._window_seconds(duration)
+        if secs is None:
+            return []
+        frames = int(round(secs * H3_FPS))
+        low, high = H3_WINDOW_DOC_SECONDS
+        shown = cls._secs_text(secs)
+        out = []
+
+        if secs > high:
+            if frames > H3_WINDOW_FRAMES_MAX:
+                note = (f"**{shown}s is {frames} frames**, past the "
+                        f"{H3_WINDOW_FRAMES_MAX} "
+                        f"({cls._secs_text(H3_WINDOW_FRAMES_MAX / H3_FPS)}s) "
+                        "the Sliding Window Size slider allows at all")
+            else:
+                note = (f"**{shown}s is {frames} frames**, past the "
+                        f"{cls._secs_text(high)}s MiniMax documents for one "
+                        "window")
+            marks = cls._shot_boundaries(action)
+            if marks:
+                note += (" - shot boundaries at "
+                         + cls._oxford_join([f"`{m}`" for m in marks])
+                         + " if you would rather split it")
+            out.append(note)
+        elif secs < low:
+            out.append(
+                f"**{shown}s is {frames} frames**, under the "
+                f"{cls._secs_text(low)}s MiniMax documents - H3 generates "
+                f"{H3_WINDOW_FRAMES_MIN} frames minimum, so it may raise the "
+                "overlap above what is asked for to fill them"
+            )
+        return out
 
     @classmethod
     def _instruction(cls, start_image, end_image, duration, shot_count):
@@ -2505,24 +3025,42 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             parts.append("heard off-screen")
         return " ".join(parts)
 
+    @staticmethod
+    def _article(phrase):
+        """"a" or "an" for a phrase we are assembling rather than storing."""
+        return "an" if (phrase or "")[:1].lower() in "aeiou" else "a"
+
+    @classmethod
+    def _shot_phrase(cls, framing, rig):
+        """
+        Framing and rig as one noun phrase: "a medium crane shot".
+
+        Both are adjectives and "shot" is added once, wherever the stack
+        ends - after the framing alone, after the rig alone, or after both.
+        """
+        words = [w for w in (cls._s(framing), cls._s(rig)) if w]
+        if not words:
+            return ""
+        phrase = " ".join(words) + " shot"
+        return f"{cls._article(phrase)} {phrase}"
+
     @classmethod
     def _camera_clause(cls, motion, ampl, speed, rig=None):
-        motion = cls._s(motion)
-        rig = cls._s(rig)
-        if not motion and not rig:
-            return ""
+        """
+        The movement, as its own sentence.
 
-        if motion:
-            verb = MOTION_VERBS.get(motion, motion.lower())
-            clause = f"The camera {verb}"
-            extras = [e for e in [cls._s(ampl), cls._s(speed)] if e]
-            if extras:
-                clause += " " + " ".join(extras)
-            if rig:
-                clause += f", {rig}"
-        else:
-            # A rig with no stated movement still says something useful.
-            clause = f"The camera is {rig}"
+        The rig is no longer written here. It belongs to the shot phrase now
+        - "a dolly shot" - so carrying it into the movement as well would
+        say it twice.
+        """
+        motion = cls._s(motion)
+        if not motion:
+            return ""
+        verb = MOTION_VERBS.get(motion, motion.lower())
+        clause = f"The camera {verb}"
+        extras = [e for e in [cls._s(ampl), cls._s(speed)] if e]
+        if extras:
+            clause += " " + " ".join(extras)
         return clause + "."
 
     @classmethod
@@ -2783,46 +3321,47 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         framing = cls._s(framing)
         lens = cls._s(lens)
         rig = cls._s(rig)
-        anchor = cls._s(anchor)
+        # A full stop typed at the end of the anchor would leave the lens
+        # and rig hanging off a finished sentence - "...without a scratch.,
+        # on a crane." - which reads as a fragment and makes the dangling
+        # worse.
+        anchor = cls._s(anchor).rstrip().rstrip(".").rstrip()
 
         sentences = []
-        if framing or anchor:
-            if verb:
-                head = verb
-                if framing:
-                    head += f" {framing}"
-            elif framing:
-                # No verb: the framing itself opens the sentence, and with no
-                # anchor after it the lens reads better joined than appended
-                # ("A medium shot on a 35mm lens." not "A medium shot, on a
-                # 35mm lens.").
-                head = framing
-                if lens and not anchor:
-                    head += f" on {lens}"
-                    lens = ""
+        shot = cls._shot_phrase(framing, rig)
+        if shot or anchor:
+            # "The camera cuts to a medium hood-mounted shot on a 35mm lens
+            # of a car driving at speed." The lens sits between the shot and
+            # what it is pointed at, so both read as describing the shot
+            # rather than as things in the scene.
+            if verb and shot:
+                head = f"{verb} {shot}"
+            elif shot:
+                # No verb: the shot phrase opens the sentence itself.
+                head = shot
+            elif verb:
+                head = f"{verb} {anchor}"
+                anchor = ""
             else:
-                # An anchor with nothing to frame it still needs a verb of
-                # some kind, or the sentence is a bare noun phrase.
-                head = "the frame holds"
-            if anchor:
-                # The subject sits in the middle, where the grammar wants it.
-                head += f" of {anchor}" if verb or framing else f" {anchor}"
+                # An anchor with nothing framing it still needs a verb, or
+                # the sentence is a bare noun phrase.
+                head = f"the frame holds {anchor}"
+                anchor = ""
             if lens:
-                head += f", on {lens}"
-            if rig:
-                head += f", {rig}"
+                head += f" on {lens}"
+            if anchor:
+                head += f" of {anchor}"
             sentences.append(head[0].upper() + head[1:] + ".")
-        elif lens or rig:
-            bits = [b for b in [f"on {lens}" if lens else "", rig] if b]
-            sentences.append("The shot is " + ", ".join(bits) + ".")
+        elif lens:
+            sentences.append(f"Shot on {lens}.")
 
-        camera = cls._camera_clause(motion, ampl, speed,
-                                    None if sentences else rig)
+        camera = cls._camera_clause(motion, ampl, speed)
         if camera:
             sentences.append(camera)
 
         if not sentences:
-            return gr.update(), gr.update(), "Pick a framing, lens, rig or motion first."
+            return (gr.update(), gr.update(),
+                    "Pick a framing, lens, rig or motion first.")
         return (cls._append_to_line(text, " ".join(sentences)), text,
                 "Added the camera.")
 
@@ -3147,6 +3686,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         end_image = bool(take())
         ref_mode = bool(take())
         duration = take()
+        window_commands = bool(take())
         style = cls._s(take())
         grading = cls._s(take())
         location = cls._s(take())
@@ -3154,11 +3694,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         lighting = cls._s(take())
         atmosphere = cls._s(take())
         camera_type = cls._s(take())
-        video_role = cls._s(take())
-        video_desc = cls._s(take())
-        video_retention = cls._s(take())
-        video_audio = cls._s(take())
-        video_audio_desc = cls._s(take())
+
+        ref_count = int(cls._s(take()) or 0)
+        refs = []
+        for _ in range(MAX_REFS):
+            refs.append({
+                "slot": cls._s(take()), "role": cls._s(take()),
+                "desc": cls._s(take()), "retention": cls._s(take()),
+                "from": cls._s(take()),
+            })
 
         entry_count = int(cls._s(take()) or 0)
         entries = []
@@ -3188,12 +3732,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         return dict(
             start_image=start_image, end_image=end_image,
-            ref_mode=ref_mode, duration=duration, style=style,
+            ref_mode=ref_mode, duration=duration,
+            window_commands=window_commands, style=style,
             grading=grading, location=location, time_of_day=time_of_day,
             lighting=lighting, atmosphere=atmosphere, camera_type=camera_type,
-            video_role=video_role, video_desc=video_desc,
-            video_retention=video_retention, video_audio=video_audio,
-            video_audio_desc=video_audio_desc,
+            ref_count=ref_count, refs=refs,
             entry_count=entry_count, entries=entries,
             task_types=task_types, summary_text=summary_text,
             action=action,
@@ -3205,25 +3748,83 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         )
 
     @classmethod
-    def _append_window(cls, existing, *values):
+    def _append_window(cls, existing, *values, join):
         """
         Append this prompt below whatever is already in the box, separated by
         one blank line. That blank line is the window separator when the
         prompt-processing mode is set to paragraph-per-sliding-window, and
         each assembled prompt has no blank lines of its own, so the boundary
         is unambiguous.
+
+        join is "continue" or "cut", from whichever button was pressed. It
+        is dropped when the box is empty: the first window's overlap is
+        clamped to whatever a start image or Continue Video source
+        provides, so there is nothing for a join to decide there.
         """
-        built, status = cls._build(*values)
+        first = not (existing or "").strip()
+        built, status = cls._build(*values, join=None if first else join)
         if not built.strip():
             return existing, "Nothing to append yet."
 
         existing = (existing or "").rstrip()
-        if not existing:
+        if first:
             return built, status.replace("Prompt written.",
                                          "First window written.")
+
+        extra = cls._join_warnings(existing, values, join)
         combined = existing + "\n\n" + built
         windows = combined.count("\n\n") + 1
-        return combined, f"Appended as window {windows}. " + status.split(". ", 1)[-1]
+        head = ("Appended as window "
+                f"{windows}, {'continuing' if join == 'continue' else 'cutting'}"
+                " from the one before. ")
+        tail = status.split(". ", 1)[-1]
+        if extra:
+            # The build's own warnings, if it had any, are already in tail.
+            joined = "; ".join(extra)
+            tail = (f"Also: {joined}. {tail}" if tail.startswith("Read ")
+                    else f"{tail} Also: {joined}.")
+        return combined, head + tail
+
+    @classmethod
+    def _join_warnings(cls, previous, values, join):
+        """
+        Problems visible only at the seam between two windows.
+
+        The continuation signal is one-way. A `<cutoff>` in the window
+        before means its last line is still running, which proves the two
+        windows are connected; nothing proves the opposite, since a shot
+        can carry on in silence. So this warns about cutting away from an
+        unfinished line and stays quiet otherwise.
+        """
+        out = []
+        if join == "cut" and "<cutoff>" in (previous or ""):
+            out.append("the window before ends on a `<cutoff>`, so its line "
+                       "is still running - a new shot cuts away from it "
+                       "mid-sentence")
+
+        # Picture numbering restarts inside every window, and from the
+        # second one the carried frame has already taken <Picture 1>.
+        # Whether an end image is actually attached is generator state this
+        # cannot see, so this says what changes rather than rewriting it.
+        d = cls._unpack(values)
+        if d["start_image"] or d["end_image"]:
+            if join == "continue":
+                out.append("from window 2 the overlap frame is `<Picture 1>`, "
+                           "so an end image here is `<Picture 2>` - check the "
+                           "instruction line reads the way you meant")
+            else:
+                out.append("picture numbering restarts in each window - after "
+                           "a `/new_shot` there is no carried frame, so an "
+                           "end image here is `<Picture 1>`")
+        return out
+
+    @classmethod
+    def _append_continuing(cls, existing, *values):
+        return cls._append_window(existing, *values, join="continue")
+
+    @classmethod
+    def _append_cut(cls, existing, *values):
+        return cls._append_window(existing, *values, join="cut")
 
     @classmethod
     def _speaking_ids(cls, action):
@@ -3410,19 +4011,23 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if shot_count > 1:
             sentences.append(f"It runs to {shot_count} shots.")
 
-        role = cls._s(d["video_role"])
-        if role not in ("", "none"):
-            vdesc = cls._s(d["video_desc"])
-            phrasing = {
-                "continue from it": "The source video is continued",
-                "edit it": "The source video is edited",
-                "reference its camera and cutting only":
-                    "The source video guides camera movement and cutting",
-            }.get(role, f"The source video is used to {role}")
-            sentences.append(phrasing
-                             + (f", providing {vdesc}" if vdesc else "") + ".")
+        used = []
+        for r in d["refs"][:d["ref_count"]]:
+            slot = cls._s(r["slot"]).strip("<>")
+            if not slot:
+                continue
+            role = cls._s(r["role"])
+            what = cls._s(r["desc"])
+            phrase = f"<{slot}>"
+            if role:
+                phrase += f" as {role}"
+            if what:
+                phrase += f", providing {what}"
+            used.append(phrase)
+        if used:
+            sentences.append("It draws on " + cls._oxford_join(used) + ".")
 
-        if not opening and not named and role in ("", "none"):
+        if not opening and not named and not used:
             sentences = []
 
         if not sentences:
@@ -3514,7 +4119,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         Returns (text, status). text is "" when nothing usable came back.
         """
         d = cls._unpack(values)
-        keep_loaded = bool(values[-1])
         digest = cls._audio_digest(d)
         if not digest:
             return "", ("Nothing to work from yet - add a **location**, an "
@@ -3522,7 +4126,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
         prompt = (SOUNDSCAPE_ONLY_PROMPT if which == "soundscape"
                   else MUSIC_ONLY_PROMPT)
-        raw, note = _run_enhancer(prompt, digest, keep_loaded=keep_loaded)
+        raw, note = _run_enhancer(prompt, digest)
         if raw is None:
             # The probe line is worth showing: it says which of the three
             # routes to the enhancer were open, which is the only way to tell
@@ -3538,8 +4142,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             got = sound or music
         if not got:
             retry, retry_note = _run_enhancer(AUDIO_RETRY_PROMPT, digest,
-                                              max_new_tokens=512,
-                                              keep_loaded=keep_loaded)
+                                              max_new_tokens=512)
             if retry:
                 raw, note = retry, retry_note
                 sound, music = _parse_audio_reply(raw)
@@ -3574,8 +4177,176 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         text, status = cls._ask_for_audio_field(values, "music")
         return (text if text else gr.update()), status
 
+    # Roles that mean something other than "referenced". Everything else in
+    # REF_ROLE_PHRASES is a reference of one kind or another.
+    TASK_ROLE_HINTS = {
+        "continued from": "video continuation",
+        "edited": "video editing",
+        "edited frame": "video editing",
+        "keyframe": "keyframe completion",
+    }
+
+    # Audio markers that mean the clip itself is carried into the output
+    # rather than guiding what gets generated.
+    AUDIO_REUSE_MARKERS = ("fully_copy", "partially_copy")
+
     @classmethod
-    def _build(cls, *values):
+    def _soundtrack_slot(cls, d, video):
+        """
+        The audio slot carrying a given video's soundtrack.
+
+        A declared Reference sources row wins - an audio row whose *taken
+        from* names this video. You can see the WanGP panel and the plugin
+        cannot, so if you have said which slot it occupies, that is the
+        answer.
+
+        Otherwise fall back to the positional default described at
+        SOUNDTRACK_FOLLOWS_VIDEO_ORDER. It is a default rather than a rule:
+        nothing here blocks a pairing that disagrees with it, because the
+        behaviour it is read from could change and a plugin that writes
+        prompt text is in no position to enforce anything anyway.
+        """
+        want = (video or "").strip("<>").lower()
+        for r in d["refs"][:d["ref_count"]]:
+            slot = (r["slot"] or "").strip("<>")
+            origin = (r["from"] or "").strip("<>")
+            if slot and origin.lower() == want and "audio" in slot.lower():
+                return slot
+
+        if SOUNDTRACK_FOLLOWS_VIDEO_ORDER:
+            digits = "".join(c for c in (video or "") if c.isdigit())
+            if digits:
+                return f"Audio {int(digits)}"
+        return ""
+
+    @classmethod
+    def _implied_tasks(cls, values):
+        """
+        The task types the rest of the form already implies.
+
+        Reference task is a tab people never open if they are only working
+        inside the subject blocks, and an unticked task type is invisible
+        until the summary comes out without its prefix. Everything it asks
+        for is already stated somewhere else, so it is derived rather than
+        remembered - the same reasoning as the shot count and the speaker
+        list.
+        """
+        try:
+            d = cls._unpack(values)
+        except Exception:                             # noqa: BLE001
+            return []
+        if not d["ref_mode"]:
+            return []
+
+        found = set()
+        if d["start_image"] or d["end_image"]:
+            found.add("keyframe completion")
+
+        for e in d["entries"][:d["entry_count"]]:
+            if cls._slot_list(e["source"]):
+                found.add("reference generation")
+            if cls._s(e["motion_from"]):
+                found.add("reference generation")
+            if cls._s(e["voice_from"]):
+                # True whether or not the soundtrack row exists yet: the
+                # intent is an audio reference either way.
+                found.add("audio reference")
+
+        for slot, marker in ((cls._s(d["ambience_from"]),
+                              cls._s(d["ambience_retention"])),
+                             (cls._s(d["music_from"]),
+                              cls._s(d["music_retention"]))):
+            if not slot:
+                continue
+            found.add("audio reuse" if marker in cls.AUDIO_REUSE_MARKERS
+                      else "audio reference")
+
+        for r in d["refs"][:d["ref_count"]]:
+            slot = cls._s(r["slot"])
+            if not slot:
+                continue
+            role = cls._s(r["role"])
+            hint = cls.TASK_ROLE_HINTS.get(role)
+            if hint:
+                found.add(hint)
+            elif cls._slot_kind(slot) == "audio":
+                found.add("audio reuse"
+                          if cls._s(r["retention"]) in cls.AUDIO_REUSE_MARKERS
+                          else "audio reference")
+            else:
+                found.add("reference generation")
+
+        return [t for t in TASK_TYPES if t in found]
+
+    @classmethod
+    def _task_list(cls, value):
+        """
+        The task field as a list, whichever form it arrives in.
+
+        The checkbox group hands back a list, but a saved form or a restored
+        draft can carry the comma-joined string the rest of the assembly
+        reads. Treating a string as empty would silently drop ticks that
+        were already there, which is the one thing an add-only merge must
+        not do.
+        """
+        if isinstance(value, (list, tuple)):
+            items = [str(v) for v in value]
+        else:
+            items = (cls._s(value) or "").split(",")
+        return [p.strip() for p in items if p and p.strip()]
+
+    @classmethod
+    def _sync_tasks(cls, derived, *values):
+        """
+        Bring the task boxes in step with the rest of the form.
+
+        Ticks what the form now implies, and unticks only what an earlier
+        sync had ticked for a reason that has since gone away - pick
+        Picture 1 on a subject and reference generation appears, remove it
+        again and it goes. A box ticked by hand was never in the derived
+        set and is never touched, so "video continuation" for a source
+        video attached on WanGP's side survives every later edit.
+
+        `derived` is what the last sync was responsible for, carried in a
+        gr.State. That is session plumbing rather than a form field: not in
+        the flat list, not written to the draft, not visible or editable.
+        The rule about the form remembering nothing between presses is
+        about the form, and is intact.
+
+        After a reload the set starts empty, so the first sync can only
+        add. A tick left stale across that reload would survive until the
+        field that implied it is touched, which the "no task type" warning
+        still covers.
+        """
+        try:
+            d = cls._unpack(values)
+        except Exception:                             # noqa: BLE001
+            return gr.update(), cls._task_list(derived)
+
+        previous = cls._task_list(derived)
+        current = cls._task_list(d["task_types"])
+        implied = cls._implied_tasks(values)
+
+        stale = [t for t in previous if t not in implied]
+        kept = [t for t in current if t not in stale]
+        merged = kept + [t for t in implied if t not in kept]
+        ordered = [t for t in TASK_TYPES if t in merged]
+
+        if ordered == current:
+            return gr.update(), implied
+        return gr.update(value=ordered), implied
+
+    @classmethod
+    def _build(cls, *values, join=None):
+        """
+        Assemble the prompt for one window.
+
+        join says how this window meets the one before it - None for a
+        window with nothing before it, "continue" for an overlap, "cut"
+        for a hard cut. It only reaches the `[/...]` block at the head of
+        the output; nothing else in the assembly reads it. Gradio calls
+        this with the flat list alone, so a plain Insert gets None.
+        """
         d = cls._unpack(values)
         start_image = d["start_image"]; end_image = d["end_image"]
         ref_mode = d["ref_mode"]; duration = d["duration"]
@@ -3583,9 +4354,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         location = d["location"]; time_of_day = d["time_of_day"]
         lighting = d["lighting"]
         atmosphere = d["atmosphere"]; camera_type = d["camera_type"]
-        video_role = d["video_role"]; video_desc = d["video_desc"]
-        video_retention = d["video_retention"]; video_audio = d["video_audio"]
-        video_audio_desc = d["video_audio_desc"]
         entry_count = d["entry_count"]; entries = d["entries"]
         task_types = d["task_types"]
         summary_text = d["summary_text"]
@@ -3626,9 +4394,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # An asset can serve several roles. The guide asks for one natural
         # sentence per label rather than a subsection each, so roles are
         # gathered here and written once.
+        # The asset registry. Keyed on the slot the user named, because a
+        # label belongs to the file rather than to the job: <Video 1> is the
+        # first video attached, whatever duties it ends up serving. Two
+        # routes write into this - a subject naming an asset, and a
+        # Reference sources row - and a slot named by both merges into one
+        # definition and one retention line.
         asset_roles = {}     # "Audio 1" -> [role phrase, ...]
-        asset_kind = {}      # "Audio 1" -> "audio" | "video"
+        asset_kind = {}      # "Audio 1" -> "audio" | "video" | "picture"
         asset_marker = {}    # "Audio 1" -> retention marker
+        asset_desc = {}      # "Audio 1" -> [what it contributes, ...]
+        asset_from = {}      # "Audio 1" -> "Video 1", for a soundtrack
+        unset_retention = []     # subjects that named an asset but no marker
 
         for idx, e in enumerate(active):
             desc = cls._s(e["desc"])
@@ -3678,7 +4455,44 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             # Reference assets attached to this entry. The label names the
             # actual slot, so it is never renumbered.
+            #
+            # A picture named here is not given its own definition: the guide
+            # only wants a standalone <Picture N> entry when it is a keyframe,
+            # composition anchor, edited frame or storyboard, which is what
+            # the Reference sources section is for. A video is different -
+            # the guide treats <Video N> as a whole-asset role in its own
+            # right, so it earns a line.
+            for one in cls._slot_list(e["source"]) if is_ref else []:
+                if cls._slot_kind(one) != "video":
+                    continue
+                asset_roles.setdefault(one, []).append(
+                    f"the appearance and content reference for {def_label}")
+                asset_kind[one] = "video"
+                # A video a character's face and build are lifted from is
+                # about the strongest claim there is, so the generic
+                # weak_reference fallback - which means loose inspiration -
+                # is wrong here. The subject's own marker wins when set.
+                asset_marker.setdefault(
+                    one, cls._s(e["retention"]) or APPEARANCE_RETENTION)
+                if not cls._s(e["retention"]):
+                    unset_retention.append(def_label)
+
+            # A voice reference is always an <Audio N>: the guide gives that
+            # label to audio referenced for voice, and numbers it
+            # independently of video. So a video picked here is resolved to
+            # whichever audio slot carries its soundtrack - which is what
+            # WanGP does too, spending an audio-reference slot on it. If no
+            # row declares that, the warning below says so rather than
+            # writing a label the model will not read as audio.
             vfrom = cls._s(e["voice_from"]) if is_ref else ""
+            if vfrom and cls._slot_kind(vfrom) == "video":
+                origin, vfrom = vfrom, cls._soundtrack_slot(d, vfrom)
+                if vfrom:
+                    # Say where it came from. The reader and the model both
+                    # benefit from knowing this audio is the video's own
+                    # track rather than a separate clip that happens to sit
+                    # in the next slot.
+                    asset_from.setdefault(vfrom, origin.strip("<>"))
             if vfrom:
                 asset_roles.setdefault(vfrom, []).append(
                     f"the voice-timbre reference for {def_label}")
@@ -3740,26 +4554,27 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Empty means no score, which is what N/A says. No separate switch.
         music_field = cls._sentence_case(music) or "N/A"
 
-        video_label = ""
-        if video_role != "none" and video_desc:
-            counters["Video"] += 1
-            video_label = f"<Video {counters['Video']}>"
-            defs.append(f"{video_label} provides {video_desc}.")
-            retention.append(
-                f"{video_label}: {video_retention or 'weak_reference'} - {video_desc}."
-            )
-
-        # Audio from the source video gets its own <Audio N> label and uses
-        # the audio marker set, which differs from the picture one.
-        if video_audio or video_audio_desc:
-            counters["Audio"] += 1
-            alabel = f"<Audio {counters['Audio']}>"
-            what = video_audio_desc or "the original audio"
-            source = f" from {video_label}" if video_label else ""
-            defs.append(f"{alabel} is {what}{source}.")
-            retention.append(
-                f"{alabel}: {video_audio or 'reference'} - {what}."
-            )
+        if ref_mode:
+            for r in d["refs"][:d["ref_count"]]:
+                slot = cls._s(r["slot"])
+                if not slot:
+                    continue
+                slot = slot.strip("<>")
+                role = cls._s(r["role"])
+                phrase = REF_ROLE_PHRASES.get(role, (None, None))[1]
+                if not phrase:
+                    # An unknown role is written through as typed rather than
+                    # dropped - the dropdown takes custom values.
+                    phrase = f"the {role} reference" if role else "referenced"
+                asset_roles.setdefault(slot, []).append(phrase)
+                asset_kind[slot] = cls._slot_kind(slot)
+                if cls._s(r["retention"]):
+                    asset_marker[slot] = cls._s(r["retention"])
+                if cls._s(r["desc"]):
+                    asset_desc.setdefault(slot, []).append(cls._s(r["desc"]))
+                origin = cls._s(r["from"]).strip("<>")
+                if origin:
+                    asset_from[slot] = origin
 
         # Audio references for the ambient bed and the score. Ignored unless
         # reference mode is on, so a value left in a hidden block cannot leak
@@ -3780,17 +4595,36 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             if music_retention:
                 asset_marker[music_from] = music_retention
 
-        # One line per label, however many roles it serves.
-        for slot in sorted(asset_roles):
-            roles = asset_roles[slot]
+        # One line per label, however many roles it serve. A slot named by a
+        # subject and by a reference row is one asset doing two jobs, not two
+        # assets, so its duties are joined rather than written twice.
+        for slot in sorted(asset_roles, key=cls._slot_order):
+            # The same duty can arrive by two routes - a subject naming an
+            # asset and a Reference sources row saying the same thing - and
+            # that is one claim, not two. The two phrasings are not always
+            # identical: the subject route adds "for <Subject 1> (S1)" to
+            # the same opening words. So a role that another role merely
+            # extends is dropped in favour of the more specific one.
+            roles = list(dict.fromkeys(asset_roles[slot]))
+            roles = [r for r in roles
+                     if not any(o != r and o.startswith(r) for o in roles)]
             joined = (", ".join(roles[:-1]) + f" and {roles[-1]}"
                       if len(roles) > 1 else roles[0])
-            defs.append(f"<{slot}> is {joined}.")
+            line = f"<{slot}> is {joined}"
+            origin = asset_from.get(slot)
+            if origin:
+                line += f", taken from <{origin}>"
+            what = asset_desc.get(slot)
+            if what:
+                line += ", supplying " + cls._oxford_join(what)
+            defs.append(line.rstrip(".") + ".")
             uses_reference_assets = True
 
-            default = "reference" if asset_kind.get(slot) == "audio" else "weak_reference"
+            default = ("reference" if asset_kind.get(slot) == "audio"
+                       else "weak_reference")
             marker = asset_marker.get(slot, default)
-            retention.append(f"<{slot}>: {marker} - {joined}.")
+            detail = cls._oxford_join(what) if what else joined
+            retention.append(f"<{slot}>: {marker} - {detail}.")
 
         prefix = cls._s(task_types)
         prefix = " + ".join(p.strip() for p in prefix.split(",") if p.strip())
@@ -3805,6 +4639,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # no summary, no retention_analysis - speakers carry their own
             # identity inline and (S1) is the only label.
             lines = []
+            # First line of the paragraph. WanGP substitutes it out and
+            # strips what is left, so the section below moves up to the top
+            # before the model ever sees it.
+            command = cls._window_command(duration, join,
+                                          d["window_commands"])
+            if command:
+                lines.append(command)
             instruction = cls._instruction(start_image, end_image, duration,
                                            shot_count)
             if instruction:
@@ -3814,6 +4655,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                       f"non_diegetic_music: {music_field}"]
             warnings = cls._action_warnings(action, duration,
                                             cls._known_speaker_ids(d))
+            warnings += cls._window_warnings(duration, action)
             if not cls._s(action):
                 warnings.append("the **action** is empty")
             check = "Read it through for grammar before generating."
@@ -3822,6 +4664,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             return cls._no_blank_lines("\n".join(lines)), status
 
         sections = []
+        command = cls._window_command(duration, join,
+                                      d["window_commands"])
+        if command:
+            sections.append(command)
         instruction = cls._instruction(start_image, end_image, duration,
                                        shot_count)
         if instruction:
@@ -3846,8 +4692,16 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # most prompts have no task type at all.
         warnings = cls._action_warnings(action, duration,
                                         cls._known_speaker_ids(d))
+        warnings += cls._window_warnings(duration, action)
         if not cls._s(action):
             warnings.append("the **action** is empty")
+        if unset_retention:
+            who = cls._oxford_join([f"**{n}**" for n in
+                                    dict.fromkeys(unset_retention)])
+            warnings.append(
+                f"{who} draws on a reference asset with **what is retained** "
+                f"left blank, so `{APPEARANCE_RETENTION}` was assumed - set "
+                "it if you meant something else")
         # Only a reminder once reference mode is actually on.
         if ref_mode and not prefix:
             warnings.append("reference mode is on but no **task type** is "
@@ -3860,17 +4714,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                             "skipped for having no description or source")
         # Audio references imply an audio task type.
         audio_slots = {s for s in asset_roles if asset_kind.get(s) == "audio"}
-        if (audio_slots or video_audio or video_audio_desc) and \
-                "audio" not in prefix.lower():
+        if audio_slots and "audio" not in prefix.lower():
             warnings.append("audio is referenced but no **audio task type** "
                             "(audio reference / audio reuse) is ticked")
 
-        # WanGP's Audio References selector is one dropdown, so the video's
-        # own soundtrack and standalone audio clips cannot both be used.
-        if audio_slots and (video_audio or video_audio_desc):
-            warnings.append("both the **source video's audio** and standalone "
-                            "**audio slots** are set - WanGP lets you pick one "
-                            "or the other")
+        # WanGP's Audio References selector offers standalone references or
+        # reference-video soundtracks, never a mix - so an audio slot lifted
+        # from a video and one that stands on its own cannot both be used.
+        from_video = {s for s in audio_slots if asset_from.get(s)}
+        if from_video and (audio_slots - from_video):
+            warnings.append("some audio is taken from a video and some "
+                            "stands alone - WanGP's Audio References "
+                            "selector lets you pick one or the other")
 
         check = "Read it through for grammar before generating."
         status = (f"Prompt written. {check}"
@@ -3922,7 +4777,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if cls._s(d["action"]) or cls._s(d["summary_text"]):
             return True
         for field in ("style", "grading", "location", "time_of_day",
-                      "lighting", "atmosphere", "camera_type", "video_desc",
+                      "lighting", "atmosphere", "camera_type",
                       "soundscape", "music"):
             if cls._s(d[field]):
                 return True
@@ -4031,6 +4886,87 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return ([gr.update()] * (cls._flat_len() + CLEAR_GROUP_UPDATES)
                 + [note])
 
+    # -- older layouts ------------------------------------------------------
+    #
+    # The flat list is positional, so a form saved under a different layout
+    # cannot be poured into the current one - every value after the first
+    # difference lands in the wrong field. Refusing is the safe default and
+    # what happens to anything unrecognised.
+    #
+    # But a layout change is not always a content change. 3.2 replaced the
+    # Source video block with the Reference sources section, and everything
+    # the old block held has somewhere to go in the new one, so those saves
+    # can be carried forward rather than lost. Each migration is one step
+    # between adjacent layouts; a save two versions old runs through both.
+
+    # The 3.1 flat list: eleven scene fields, then the five Source video
+    # fields, then entry_count and everything after it - none of which moved.
+    FLAT_LEN_3_1 = 91
+    HEAD_LEN_3_1 = 11   # eleven scene fields; 3.2 inserts one more
+    VIDEO_ROLES_3_1 = ("none", "continue from it", "edit it",
+                       "reference its camera and cutting only")
+
+    @classmethod
+    def _migrate_3_1(cls, values):
+        """
+        3.1's Source video block into 3.2's Reference sources rows.
+
+        The old block described one video and, separately, that video's
+        audio. Both become rows: the video in its own slot, its audio in an
+        audio slot that names the video it came from - which is what the new
+        model calls the same thing.
+        """
+        head = list(values[:cls.HEAD_LEN_3_1])
+        # 3.1.1 never wrote scheduling commands, so a save from
+        # it keeps the behaviour it had.
+        head.insert(4, False)
+        role, vdesc, vret, aret, adesc = values[cls.HEAD_LEN_3_1:
+                                                cls.HEAD_LEN_3_1 + 5]
+        rest = list(values[cls.HEAD_LEN_3_1 + 5:])   # entry_count onward
+
+        role_map = {
+            "continue from it": "continued from",
+            "edit it": "edited",
+            "reference its camera and cutting only":
+                "camera and cutting structure",
+        }
+        rows = []
+        if cls._s(role) not in ("", "none") or cls._s(vdesc) or cls._s(vret):
+            rows.append(["Video 1", role_map.get(cls._s(role), cls._s(role)),
+                         cls._s(vdesc), cls._s(vret), ""])
+        if cls._s(aret) or cls._s(adesc):
+            rows.append(["Audio 1", "soundtrack",
+                         cls._s(adesc) or "the original audio", cls._s(aret),
+                         "Video 1" if rows else ""])
+
+        out = head + [len(rows)]
+        for i in range(MAX_REFS):
+            out += rows[i] if i < len(rows) else ["", "", "", "", ""]
+        return out + rest
+
+    @classmethod
+    def _migrate_values(cls, values):
+        """
+        Bring a saved form up to the current layout.
+
+        Returns (values, note). A layout this cannot recognise comes back as
+        (None, "") so the caller refuses rather than guessing - a wrong guess
+        here is silent, and puts a lens in an anchor.
+        """
+        values = list(values)
+        if len(values) == cls._flat_len():
+            return values, ""
+
+        if (len(values) == cls.FLAT_LEN_3_1
+                and cls._s(values[cls.HEAD_LEN_3_1]) in cls.VIDEO_ROLES_3_1):
+            upgraded = cls._migrate_3_1(values)
+            if len(upgraded) == cls._flat_len():
+                return upgraded, (
+                    " Upgraded from the 3.1 layout - the Source video block "
+                    "is now rows in **Reference sources**, so check them "
+                    "before you build.")
+        return None, ""
+
     @classmethod
     def _apply_saved(cls, blob, describe):
         """
@@ -4043,11 +4979,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         """
         expected = cls._flat_len()
         values = blob.get("values") or []
-        if len(values) != expected or blob.get("flat_len") != expected:
+        values, upgrade_note = cls._migrate_values(values)
+        if values is None:
+            saved_len = len(blob.get("values") or [])
             return cls._unchanged_form(
-                f"That was saved with {len(values)} fields and this version "
+                f"That was saved with {saved_len} fields and this version "
                 f"expects {expected}, so loading it would shift every value "
                 "after the difference. Left the form alone.")
+        describe += upgrade_note
 
         # Slots hidden at save time have to be reopened, or the restored
         # values sit in components nobody can see.
@@ -4055,6 +4994,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         groups = [gr.update(visible=(i < d["entry_count"]))
                   for i in range(MAX_ENTRIES)]
         groups += [gr.update(visible=d["ref_mode"])] * MAX_ENTRIES
+        groups += [gr.update(visible=(i < d["ref_count"]))
+                   for i in range(MAX_REFS)]
         groups += [gr.update(visible=d["ref_mode"])] * 3
 
         _DRAFT_CACHE["values"] = list(values)
@@ -4106,6 +5047,117 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         except Exception:                             # noqa: BLE001
             pass
         return path
+
+    @classmethod
+    def _subjects_dir(cls):
+        """The subjects folder, created on first use."""
+        path = Path(__file__).resolve().parent / "subjects"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception:                             # noqa: BLE001
+            pass
+        return path
+
+    @classmethod
+    def _subject_files(cls):
+        """Every saved subject, newest first."""
+        try:
+            files = [p for p in cls._subjects_dir().glob("*.json")
+                     if p.is_file()]
+        except Exception:                             # noqa: BLE001
+            return []
+        return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    @classmethod
+    def _subject_choices(cls, limit=SUBJECT_LIST_LIMIT):
+        return [p.stem for p in cls._subject_files()[:limit]]
+
+    @classmethod
+    def _save_subject(cls, name, *values):
+        """
+        Write one entry's character fields to subjects/<n>.json.
+
+        Takes the entry's own controls in SUBJECT_FIELDS order, so the same
+        list drives saving, loading and the wiring - there is no second place
+        to keep in step.
+        """
+        filename = cls._prompt_filename(name)
+        if not filename:
+            return gr.update(), ("Give the subject a name first - letters, "
+                                 "numbers, spaces, dashes.")
+        fields = dict(zip(SUBJECT_FIELDS, values))
+        if not (cls._s(fields.get("desc"))
+                or cls._s(fields.get("char_name"))):
+            return gr.update(), ("There is nothing to save yet - give the "
+                                 "subject a description or a name in the "
+                                 "creator.")
+
+        path = cls._subjects_dir() / f"{filename}.json"
+        existed = path.exists()
+        blob = {
+            "kind": "subject",
+            "saved": time.strftime("%Y-%m-%d %H:%M"),
+            "name": filename,
+            "fields": {k: fields.get(k) for k in SUBJECT_FIELDS},
+        }
+        try:
+            temp = path.with_suffix(".json.tmp")
+            temp.write_text(json.dumps(blob), encoding="utf-8")
+            temp.replace(path)
+        except Exception as exc:                      # noqa: BLE001
+            return gr.update(), (f"Could not save the subject "
+                                 f"({type(exc).__name__}). Tried `{path}`.")
+
+        note = (("Replaced" if existed else "Saved") + f" **{filename}**. "
+                "Reference assets and the speaker ID are not saved - they "
+                "belong to the project, not the character.")
+        return gr.update(choices=cls._subject_choices(), value=filename), note
+
+    @classmethod
+    def _load_subject(cls, name):
+        """
+        Put a saved subject into this entry's fields.
+
+        Returns one value per SUBJECT_FIELDS, then the creator block's
+        visibility, then the status line. A field the saved file does not
+        have keeps whatever the schema defaults to rather than blanking, so
+        an older save loads into a newer plugin without wiping new fields.
+        """
+        def unchanged(note):
+            return [gr.update()] * len(SUBJECT_FIELDS) + [gr.update(), note]
+
+        filename = cls._prompt_filename(name)
+        if not filename:
+            return unchanged("Pick a subject to load first.")
+        path = cls._subjects_dir() / f"{filename}.json"
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:                             # noqa: BLE001
+            return unchanged(f"Could not read **{filename}** - it may have "
+                             "been moved or written by something else.")
+        fields = blob.get("fields") if isinstance(blob, dict) else None
+        if not isinstance(fields, dict):
+            return unchanged(f"`{filename}` is not a subject this plugin "
+                             "wrote.")
+
+        out = [fields[k] if k in fields else gr.update()
+               for k in SUBJECT_FIELDS]
+        # The creator block is hidden by default, so a subject built in it
+        # would load into fields nobody can see.
+        out.append(gr.update(visible=bool(fields.get("use_creator"))))
+        missing = [k for k in SUBJECT_FIELDS if k not in fields]
+        note = f"Loaded **{filename}**, saved {blob.get('saved', 'earlier')}."
+        if missing:
+            note += (f" {len(missing)} field(s) were not in that save and "
+                     "were left as they were.")
+        return out + [note]
+
+    @classmethod
+    def _refresh_subjects(cls):
+        choices = cls._subject_choices()
+        note = (f"{len(choices)} subject(s) in `subjects`."
+                if choices else "No saved subjects yet.")
+        return gr.update(choices=choices), note
 
     @staticmethod
     def _prompt_filename(name):
@@ -4244,12 +5296,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     @staticmethod
     def _clear():
-        # start_image, end_image, ref_mode, duration, style, grading,
-        # location, time_of_day, lighting, atmosphere, camera_type,
-        # video_role, video_desc, video_retention, video_audio,
-        # video_audio_desc
-        out = [False, False, False, 8.0, "", "", "", "", "", "", "",
-               "none", "", "", "", ""]
+        # start_image, end_image, ref_mode, duration, window_commands,
+        # style, grading, location, time_of_day, lighting, atmosphere,
+        # camera_type
+        out = [False, False, False, 8.0, False,
+               "", "", "", "", "", "", ""]
+        out.append(0)                                 # ref_count
+        for _ in range(MAX_REFS):
+            # slot, role, desc, retention, from
+            out += ["", "", "", "", ""]
         out.append(0)                                 # entry_count
         for _ in range(MAX_ENTRIES):
             # kind, desc, speaker, onscreen, age, gender, pitch, timbre,
@@ -4264,10 +5319,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         out += ["", "", "", "", "style", "", ""]
 
         # Re-hide every slot. Shots and beats had their own groups; the
-        # action is one always-visible field, so only the cast entries and
-        # the reference blocks are left to hide.
+        # action is one always-visible field, so only the cast entries, the
+        # reference blocks and the reference-source rows are left to hide.
         out += [gr.update(visible=False)] * MAX_ENTRIES   # entry groups
         out += [gr.update(visible=False)] * MAX_ENTRIES   # reference blocks
+        out += [gr.update(visible=False)] * MAX_REFS      # source rows
         out += [gr.update(visible=False)] * 3   # audio refs + summary block
         assert len(out) - CLEAR_GROUP_UPDATES > 0
         return out

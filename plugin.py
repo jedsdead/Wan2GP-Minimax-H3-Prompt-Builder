@@ -189,6 +189,15 @@ _ACTION_FRAMING_RE = re.compile(
     r"\b(?:shot|close-?up|cutaway|view|frame holds|the frame)\b", re.I)
 _ACTION_SPEAKER_RE = re.compile(r"\((S\d+(?:\s*,\s*S\d+)*)\)")
 _ACTION_TRAILING_ID_RE = re.compile(r"\s*\(S\d+(?:\s*,\s*S\d+)*\)\s*$")
+# A subject named somewhere other than as a speaker - the camera's Of
+# field, most often. Braces rather than angle brackets: <Subject 1> is a
+# finished label the build writes, and a hand-typed one would be wrong the
+# moment an entry above it is left blank. {Subject 1} names the entry, and
+# is resolved in the same pass as (S1).
+_ACTION_MENTION_RE = re.compile(r"\{\s*[Ss]ubject\s+(\d+)\s*\}")
+_ACTION_BIND_RE = re.compile(
+    r"\((?P<ids>S\d+(?:\s*,\s*S\d+)*)\)"
+    r"|\{\s*[Ss]ubject\s+(?P<num>\d+)\s*\}")
 _ACTION_TRANS_RE = re.compile(r"<scenetrans>")
 _ACTION_RECEIVE_RE = re.compile(r"<scenetrans>\s*The speech carries over", re.I)
 _ACTION_TIME_RE = re.compile(r"\bAt\s+(\d{2}):(\d{2}\.\d{3})")
@@ -741,6 +750,15 @@ def _parse_audio_reply(raw):
 # =============================================================================
 
 MAX_ENTRIES = 4      # cast and subjects are one list
+
+# Words the Of field can end on that are plainly waiting for a noun, so
+# Insert subject continues the phrase instead of starting a new item.
+ANCHOR_CONNECTIVES = frozenset({
+    "of", "and", "with", "beside", "behind", "before", "between",
+    "near", "next", "to", "at", "on", "in", "over", "under", "above",
+    "below", "facing", "opposite", "toward", "towards", "across",
+    "around", "past", "through", "the", "a", "an",
+})
 MAX_SPEAKERS = 6     # how many speaker slots the Speaker dropdown offers
 
 # How many reference-source rows the Reference sources section offers.
@@ -1892,6 +1910,16 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                              "grammar wants it. Leave blank for a camera "
                              "sentence that stands on its own",
                     )
+                    with gr.Row():
+                        cam_subject = gr.Dropdown(
+                            [f"Subject {n + 1}" for n in range(MAX_ENTRIES)],
+                            label="Subject", value=None, scale=2,
+                            info="Appends a {Subject N} mention, which becomes "
+                                 "a description or a label at build time, "
+                                 "the same way (Sx) does",
+                        )
+                        ins_anchor_subject = gr.Button(
+                            "Insert subject", size="sm")
                     ins_camera = gr.Button("Add camera", size="sm")
 
                 with gr.Accordion("Dialogue", open=True):
@@ -2140,6 +2168,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                            cam_ampl, cam_speed, cam_rig, cam_anchor],
             outputs=action_out,
         )
+        # Writes into the Of box rather than the action: it is building the
+        # phrase Add camera will then use, so it has to land before the
+        # sentence is assembled.
+        ins_anchor_subject.click(
+            fn=self._insert_anchor_subject,
+            inputs=[cam_anchor, cam_subject], outputs=[cam_anchor],
+        )
         ins_dialogue.click(
             fn=self._insert_dialogue,
             inputs=flat + [dl_who, dl_type, dl_lang, dl_delivery, dl_speech,
@@ -2324,12 +2359,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     nm = (names[n] or "").strip() if n < len(names) else ""
                     label = f"Subject {n + 1} ({nm})" if nm else f"Subject {n + 1}"
                     choices.append((label, f"Subject {n + 1}"))
-                return gr.update(choices=choices)
+                # Two outputs now, so a list is read as one update each -
+                # the ambiguity the note above warns about only arises when
+                # there is a single output to land in.
+                return [gr.update(choices=choices)] * 2
 
             for name_field in char_names:
                 name_field.change(
                     fn=_sync_who_labels, inputs=char_names,
-                    outputs=[dl_who],
+                    outputs=[dl_who, cam_subject],
                 )
 
         self._wire_model_visibility(root, model_warning)
@@ -3255,6 +3293,21 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return labels, info, missing
 
     @classmethod
+    def _known_subject_keys(cls, d):
+        """
+        The entry keys a {Subject N} mention can resolve to.
+
+        Same test the build uses when it hands out labels: an entry with
+        neither a description nor a source asset is skipped, so a mention
+        pointing at it has nothing to become.
+        """
+        keys = []
+        for idx, e in enumerate(d["entries"][:d["entry_count"]]):
+            if cls._s(e["desc"]) or (d["ref_mode"] and cls._s(e["source"])):
+                keys.append(f"Subject {idx + 1}")
+        return keys
+
+    @classmethod
     def _known_speaker_ids(cls, d):
         """The speaker IDs the cast actually defines, for validation."""
         ids = []
@@ -3366,6 +3419,37 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "Added the camera.")
 
     @classmethod
+    def _insert_anchor_subject(cls, anchor, subject):
+        """
+        Append a subject mention to the camera's Of field.
+
+        The token is a placeholder of the same kind as a speaker ID, not a
+        finished label: which form the subject takes in the prompt - an
+        inline description in base modes, <Subject N> in reference mode - is
+        decided at build time, so the reference switch keeps working and a
+        blank entry above this one cannot shift the number out from under
+        it. It also means retention_analysis can see the mention, and count
+        the shot the camera framed the subject in.
+        """
+        subject = cls._s(subject)
+        if not subject:
+            return gr.update()
+        token = "{" + subject + "}"
+        anchor = (anchor or "").rstrip()
+        if not anchor:
+            return token
+        # Half-written phrasing - "a wide shot of", "the table, and" - is
+        # waiting for the subject, so it takes a space. Anything else reads
+        # as a finished item in the list the field holds, so it takes the
+        # comma that separates them.
+        if anchor.endswith((",", ":", ";")):
+            return f"{anchor} {token}"
+        tail = anchor.rsplit(" ", 1)[-1].lower()
+        if tail in ANCHOR_CONNECTIVES:
+            return f"{anchor} {token}"
+        return f"{anchor}, {token}"
+
+    @classmethod
     def _insert_dialogue(cls, *values):
         d = cls._unpack(values)
         (who, dtype, lang, delivery, speech, carries, carry_phrase,
@@ -3470,7 +3554,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return ""
 
     @classmethod
-    def _action_warnings(cls, action, duration, known_ids=None):
+    def _action_warnings(cls, action, duration, known_ids=None,
+                         known_subjects=None):
         """
         Things that will generate but not do what was meant. Warnings only -
         a freeform field is allowed to be a work in progress, and blocking
@@ -3588,6 +3673,20 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 + " has no entry in Cast & subjects, so it "
                                 "is written through as-is")
 
+        # The same in the other direction for mentions: {Subject 3} with
+        # nothing in entry 3 has no label to resolve to, and survives into
+        # the prompt with its braces on.
+        if known_subjects is not None:
+            dangling = []
+            for m in _ACTION_MENTION_RE.finditer(action):
+                key = f"Subject {m.group(1)}"
+                if key not in known_subjects and key not in dangling:
+                    dangling.append(key)
+            if dangling:
+                problems.append(", ".join(f"`{{{k}}}`" for k in dangling)
+                                + " has no entry in Cast & subjects, so it "
+                                "is written through as-is")
+
         return problems
 
     @classmethod
@@ -3604,8 +3703,19 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         seen = set()
 
         def swap(match):
-            ids = [p.strip() for p in match.group(1).split(",") if p.strip()]
-            keys = [key_by_id.get(i) for i in ids]
+            num = match.group("num")
+            if num:
+                # A {Subject N} mention names the entry directly, so there
+                # is no ID to look up - but an entry that was left blank
+                # never got a label, and writing the token through is
+                # better than writing a label that belongs to someone else.
+                ids, keys = [], [f"Subject {num}"]
+                if keys[0] not in label_for:
+                    return match.group(0)
+            else:
+                ids = [p.strip() for p in match.group("ids").split(",")
+                       if p.strip()]
+                keys = [key_by_id.get(i) for i in ids]
             if not keys or any(k is None for k in keys):
                 return match.group(0)
             unseen = [k for k in keys if k not in seen]
@@ -3635,7 +3745,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 out = out[0].upper() + out[1:]
             return out
 
-        return _ACTION_SPEAKER_RE.sub(swap, text or "")
+        return _ACTION_BIND_RE.sub(swap, text or "")
 
     @staticmethod
     def _opens_a_sentence(text, pos):
@@ -3651,19 +3761,35 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return before.endswith((".", "!", "?", ":", ";", ">", "\n"))
 
     @classmethod
-    def _subject_shots(cls, action, speaker_id):
-        """Which shots a speaker ID appears in, for retention_analysis."""
-        if not speaker_id:
+    def _subject_shots(cls, action, speaker_id, key=None):
+        """
+        Which shots a subject appears in, for retention_analysis.
+
+        A subject can be in shot without speaking in it - framed by the
+        camera, or named in the action - so the speaker ID is not the only
+        way in. A {Subject N} mention counts too, which is what lets the
+        Of field's Insert subject earn its place in the scope line.
+        """
+        patterns = []
+        if speaker_id:
+            patterns.append(re.compile(r"\((?:S\d+\s*,\s*)*"
+                                       + re.escape(speaker_id)
+                                       + r"(?:\s*,\s*S\d+)*\)"))
+        number = re.match(r"Subject\s+(\d+)$", cls._s(key))
+        if number:
+            patterns.append(re.compile(r"\{\s*[Ss]ubject\s+"
+                                       + number.group(1)
+                                       + r"\s*\}"))
+        if not patterns:
             return []
         found, current = [], None
-        pattern = re.compile(r"\((?:S\d+\s*,\s*)*"
-                             + re.escape(speaker_id)
-                             + r"(?:\s*,\s*S\d+)*\)")
         for line in (action or "").split("\n"):
             m = _ACTION_SHOT_RE.search(line)
             if m:
                 current = int(m.group(1))
-            if current and pattern.search(line) and current not in found:
+            if not current or current in found:
+                continue
+            if any(p.search(line) for p in patterns):
                 found.append(current)
         return found
 
@@ -4522,7 +4648,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 # Which shots the subject appears in is read out of the
                 # action by its speaker ID, so it cannot go stale when a
                 # shot is renumbered or deleted by hand.
-                where = cls._subject_shots(action, speaker)
+                where = cls._subject_shots(action, speaker, key)
                 scope = ""
                 if where:
                     shot_list = ", ".join(f"[Shot {n}]" for n in where)
@@ -4654,7 +4780,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                       f"overall_soundscape: {sound_field}",
                       f"non_diegetic_music: {music_field}"]
             warnings = cls._action_warnings(action, duration,
-                                            cls._known_speaker_ids(d))
+                                            cls._known_speaker_ids(d),
+                                            cls._known_subject_keys(d))
             warnings += cls._window_warnings(duration, action)
             if not cls._s(action):
                 warnings.append("the **action** is empty")
@@ -4691,7 +4818,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # Subjects invented from description are not reference assets, and
         # most prompts have no task type at all.
         warnings = cls._action_warnings(action, duration,
-                                        cls._known_speaker_ids(d))
+                                        cls._known_speaker_ids(d),
+                                        cls._known_subject_keys(d))
         warnings += cls._window_warnings(duration, action)
         if not cls._s(action):
             warnings.append("the **action** is empty")

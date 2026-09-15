@@ -5,6 +5,42 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] — 2026-09-15
+
+### Added
+
+- **Insert subject in the camera's Of field.** The **Of — what is in frame**
+  box now has a subject picker and an **Insert subject** button beside it, so
+  the thing the shot is pointed at can be a cast entry rather than a
+  description typed out again.
+
+  What it writes is a `{Subject N}` placeholder, not a finished `<Subject N>`
+  label. That matters for the same reason the speaker IDs are placeholders:
+  which form a subject takes in the prompt — an inline description in base
+  modes, a label in reference mode — is decided at build time, and the label
+  numbers count only the entries that ended up with something in them. A
+  hand-typed `<Subject 2>` is wrong the moment entry 1 is left blank; the
+  placeholder names the entry and is resolved against the cast as it stands
+  when you build.
+
+  Because the mention is now something the builder can see, it also counts
+  toward `retention_analysis` scope — a subject the camera frames without
+  speaking is listed in the shots it actually appears in, which it was not
+  when the reference was typed in by hand.
+
+  Appending follows the phrase: a box ending in a comma or a word plainly
+  waiting for a noun (`of`, `and`, `with`, `behind`) continues with a space,
+  anything else is treated as a finished item and separated with a comma.
+
+### Changed
+
+- The dialogue **Who** boxes and the new subject picker share one set of
+  labels, so a name typed into the character creator shows up in both.
+
+- A `{Subject N}` pointing at an entry with no description and no source
+  asset is reported in the warnings and written through with its braces
+  intact, rather than silently taking a neighbour's label.
+
 ## [3.2.0] — 2026-09-01
 
 ### Added

@@ -1684,6 +1684,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                 e_retention = gr.Dropdown(
                                     [""] + ALL_RETENTION, label="Retention",
                                     value="",
+                                    info="How closely to hold to the "
+                                         "source - or to the description "
+                                         "itself, if there is no asset",
                                 )
                             with gr.Row():
                                 e_note = gr.Textbox(
@@ -2255,6 +2258,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             task_triggers += [r["slot"], r["role"], r["retention"]]
         for e in entries:
             task_triggers += [e["source"], e["voice_from"], e["motion_from"]]
+
+        # A description now implies the task type too, so it has to be a
+        # trigger - but on blur rather than change. The rest of these are
+        # dropdowns that fire once; a textbox fires on every keystroke, and
+        # the sync reads the whole form. Leaving the box is the moment the
+        # description is worth acting on.
+        for e in entries:
+            box = e["desc"]
+            if hasattr(box, "blur"):
+                box.blur(fn=self._sync_tasks,
+                         inputs=[derived_tasks] + flat,
+                         outputs=[task_types, derived_tasks])
         task_triggers += [ambience_from, ambience_retention,
                           music_from, music_retention]
         for control in task_triggers:
@@ -4405,7 +4420,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             found.add("keyframe completion")
 
         for e in d["entries"][:d["entry_count"]]:
-            if cls._slot_list(e["source"]):
+            # A description is enough. The schema is what asks for the
+            # prefix, and it is the right one whether the subject is drawn
+            # from an asset or invented from the description - the hybrid
+            # models read the definitions either way.
+            if cls._s(e["desc"]) or cls._slot_list(e["source"]):
                 found.add("reference generation")
             if cls._s(e["motion_from"]):
                 found.add("reference generation")
@@ -4675,11 +4694,15 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 line += f", from {source}"
             defs.append(line.rstrip(".") + ".")
 
-            # Only reference-backed entries have anything to retain.
             if source:
                 uses_reference_assets = True
+            # A marker is worth writing whether or not an asset is behind
+            # it. With one, it says how closely to hold to the asset. With
+            # only a description, it says how closely to hold to the
+            # definition - which is what the hybrid Ref2VA models read it
+            # as, and why a text-only prompt still wants the section.
             marker = cls._s(e["retention"])
-            if source and marker:
+            if marker:
                 note = cls._s(e["note"])
                 # Which shots the subject appears in is read out of the
                 # action by its speaker ID, so it cannot go stale when a
@@ -4690,6 +4713,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     shot_list = ", ".join(f"[Shot {n}]" for n in where)
                     scope = f" (appears in {shot_list})"
                 entry = f"{label}{scope}: {marker}"
+                if not note and not source:
+                    # Nothing to name as the origin, so the definition is
+                    # the thing being held to. Saying so keeps the line a
+                    # sentence rather than a bare marker.
+                    note = "the appearance and identity given in "
+                    note += "subject_definitions"
                 if note:
                     entry += f" - {note}"
                 retention.append(entry.rstrip(".") + ".")
@@ -4872,6 +4901,17 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 f"{who} draws on a reference asset with **what is retained** "
                 f"left blank, so `{APPEARANCE_RETENTION}` was assumed - set "
                 "it if you meant something else")
+        # The Ref2VA schema is worth having without a single asset attached:
+        # the hybrid models read subject_definitions and retention_analysis
+        # as adherence instructions, so a text-only prompt built here gets
+        # tighter character consistency than the three-field base schema.
+        # That only works if the markers are actually set, and an empty
+        # section looks like a deliberate choice rather than an oversight.
+        if defs and not retention and not uses_reference_assets:
+            warnings.append("no **retention** markers are set, so "
+                            "`retention_analysis` is N/A - setting them "
+                            "is what holds the subjects steady when "
+                            "there are no reference assets")
         # Only a reminder once reference mode is actually on.
         if ref_mode and not prefix:
             warnings.append("reference mode is on but no **task type** is "

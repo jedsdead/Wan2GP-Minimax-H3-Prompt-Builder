@@ -5,6 +5,46 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] — 2026-09-15
+
+### Changed
+
+- **A described subject implies `reference generation`.** The task type was
+  only derived from a named asset, so a text-only Ref2VA prompt left the box
+  empty and the summary lost its prefix until it was ticked by hand. In
+  reference mode a subject with a description is now enough — it is the
+  right prefix whether the subject comes from an asset or from the
+  description alone.
+
+- The description boxes join the controls that keep the task type in step,
+  on blur rather than on change: the sync reads the whole form, and a
+  textbox fires on every keystroke.
+
+## [3.4.0] — 2026-09-15
+
+### Changed
+
+- **Retention no longer needs a reference asset.** A subject with a
+  description and a **retention** marker now gets a `retention_analysis`
+  line whether or not a source asset is named, so the full six-section
+  Ref2VA schema can be built with nothing attached.
+
+  This is for the hybrid Ref2VA models that also do text-to-video. They read
+  `subject_definitions` and `retention_analysis` as adherence instructions,
+  so a text-only prompt on this schema holds a character steadier across
+  shots than the base three-field one. With an asset behind it the marker
+  says how closely to hold to the asset; without one it says how closely to
+  hold to the definition.
+
+- A retention line with no note and no asset names the definition as what is
+  being held to, rather than trailing off after the marker.
+
+### Added
+
+- A warning when reference mode is on, subjects are defined, and no
+  retention markers are set — an empty `retention_analysis` is the one
+  section that looks deliberate when it is really an oversight.
+
 ## [3.3.1] — 2026-09-15
 
 ### Fixed

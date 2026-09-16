@@ -1,6 +1,6 @@
 {
     "name": "MiniMax H3 Prompt Builder",
-    "version": "3.3.0",
+    "version": "3.3.1",
     "description": "A prompt builder for MiniMax H3 in WanGP. Supports T2V, I2V, FL2V and Ref2VA.",
     "author": "JedsDeadBaby",
     "date": "2026-09-15",

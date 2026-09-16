@@ -5,6 +5,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] — 2026-09-15
+
+### Fixed
+
+- **Insert subject writes `<Subject N>`.** 3.3.0 wrote a `{Subject N}`
+  placeholder meant to be resolved at build time. In the camera's Of field
+  it was not always resolving, and an unresolved placeholder reaches H3 as
+  literal braces. The button now writes the finished tag, so what is in the
+  box is what the prompt gets.
+
+  The number is still the one the build will use, not the accordion number:
+  entries with neither a description nor a source asset get no definition
+  and are skipped, and the count runs per kind, so picking the third
+  accordion can correctly write `<Subject 2>`.
+
+  Drafts saved by 3.3.0 still build — the brace form is still resolved on
+  the way through, it is just no longer written.
+
+### Added
+
+- A label with no definition behind it is now reported in the warnings.
+  A tag is fixed once written, so an edit to the cast afterwards can leave
+  it pointing at nothing, and base modes write no `subject_definitions` at
+  all.
+
+- Insert subject declines in base modes and says why. `<Subject 1>` has
+  nothing to refer to without a definitions block; identity is written
+  inline there, which the speaker ID already handles.
+
 ## [3.3.0] — 2026-09-15
 
 ### Added

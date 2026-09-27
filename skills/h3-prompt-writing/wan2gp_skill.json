@@ -1,0 +1,96 @@
+{
+  "_doc": "Encodes the SKILL.md workflow for a single-shot writer. Required sections are listed most-important first: if the token budget is tight, later entries are dropped first. Selectors after # match section titles by prefix (e.g. '4.2', 'XVII', 'Points Most').",
+  "always": [
+    "SKILL.md#Points Most Often Got Wrong",
+    "SKILL.md#Output Rules"
+  ],
+  "rules": [
+    {
+      "when": {"mode": "base"},
+      "include": [
+        "references/base-en.txt#2",
+        "references/base-en.txt#4.1",
+        "references/base-en.txt#4.2",
+        "references/base-en.txt#4.3",
+        "references/base-en.txt#4.4",
+        "references/base-en.txt#4.6",
+        "references/base-en.txt#4.7",
+        "references/base-en.txt#4.5"
+      ],
+      "optional": ["SKILL.md#Tips for Better Results", "SKILL.md#Base Modes"]
+    },
+    {"when": {"mode": "I2VA"}, "include": ["references/base-en.txt#3.1"], "optional": ["references/base-en.txt#Case 2"], "boost": 6},
+    {"when": {"mode": "FL2VA"}, "include": ["references/base-en.txt#3.2"], "optional": ["references/base-en.txt#Case 3"], "boost": 6},
+    {"when": {"mode": "L2VA"}, "include": ["references/base-en.txt#3.3"], "optional": ["references/base-en.txt#Case 4"], "boost": 6},
+    {"when": {"mode": "T2VA"}, "optional": ["references/base-en.txt#Case 1"], "boost": 6},
+    {
+      "when": {"mode": "Ref2VA"},
+      "include": [
+        "references/ref-en.txt#1",
+        "references/ref-en.txt#2",
+        "references/ref-en.txt#3",
+        "references/ref-en.txt#4",
+        "references/ref-en.txt#5",
+        "references/ref-en.txt#6",
+        "references/base-en.txt#4.2",
+        "references/base-en.txt#4.3",
+        "references/base-en.txt#4.4"
+      ],
+      "optional": ["references/ref-en.txt#7", "SKILL.md#Full-Reference Mode", "SKILL.md#Tips for Better Results"],
+      "boost": 4
+    },
+    {
+      "when": {"sliding_window": true},
+      "include": [
+        "SKILL.md#Every window after the first opens with a continuity verb",
+        "SKILL.md#Never end a window on an underdetermined frame",
+        "SKILL.md#Two different kinds of cut"
+      ]
+    },
+    {
+      "when": {"combat": true},
+      "include": [
+        "SKILL.md#Weapon Combat",
+        "references/weapon-combat-en.txt#I",
+        "references/weapon-combat-en.txt#II",
+        "references/weapon-combat-en.txt#IV",
+        "references/weapon-combat-en.txt#V",
+        "references/weapon-combat-en.txt#VII",
+        "references/weapon-combat-en.txt#XIII",
+        "references/weapon-combat-en.txt#XVII",
+        "references/weapon-combat-en.txt#XIX",
+        "references/weapon-combat-en.txt#III",
+        "references/weapon-combat-en.txt#VIII",
+        "references/weapon-combat-en.txt#X",
+        "references/weapon-combat-en.txt#XIV",
+        "references/weapon-combat-en.txt#XVIII"
+      ],
+      "optional": [
+        "references/weapon-combat-en.txt#VI",
+        "references/weapon-combat-en.txt#XII",
+        "references/weapon-combat-en.txt#XXIII",
+        "references/weapon-combat-en.txt#IX",
+        "references/weapon-combat-en.txt#XXI"
+      ],
+      "boost": 2
+    },
+    {
+      "when": {"combat": true, "keywords": ["execution", "executes", "execute", "behead", "beheads", "finishing blow", "coup de grace"]},
+      "include": ["references/weapon-combat-en.txt#XI"]
+    }
+  ],
+  "exclude": [
+    "SKILL.md#Workflow",
+    "SKILL.md#Reference Files",
+    "references/weapon-combat-en.txt#XV",
+    "references/weapon-combat-en.txt#XVI",
+    "references/weapon-combat-en.txt#XX"
+  ],
+  "enhancer_exclude": [
+    "references/wan2gp-prompts.md",
+    "SKILL.md#Pick the right line-processing mode",
+    "SKILL.md#Format for the parser",
+    "SKILL.md#Window commands"
+  ],
+  "deepy_exclude": []
+}

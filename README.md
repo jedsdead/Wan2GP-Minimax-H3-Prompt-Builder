@@ -781,3 +781,34 @@ If WanGP reports needing a specific version to install this plugin after updatin
 ## Licence
 
 MIT
+
+## Write it with the prompt enhancer (optional)
+
+At the foot of the builder is a closed accordion, **Write it with the prompt enhancer**. Ignore it and the builder
+works exactly as it always has; the buttons above are untouched.
+
+Opened, it adds one field: **the idea**, one paragraph per sliding window, separated by a blank line. Everything else
+comes from the form above - the mode and keyframe switches, the duration, the scheduling switch, style, grading and
+scene, the cast with their voices and reference slots, the soundscape and the score. Two checkboxes let you ignore the
+form (**Use the fields above**) or have it rewrite from scratch (**Keep the action I already wrote**).
+
+**Write the prompt** runs the prompt enhancer configured in WanGP's Configuration - whichever model, quantization and
+settings you already use there. The plugin adds no model settings of its own. The result lands in an editable box with
+a check report; **Insert into prompt** replaces the prompt box and **Append to prompt** adds it below, like the
+builder's own buttons.
+
+What the writing model receives is a brief assembled from the H3 writing guides in `skills/`, narrowed to the mode,
+the window position and the subject matter, plus the form's own values as fixed facts. Subject wording and retention
+markers are pinned in every window, so a subject set to `partially_preserved` cannot drift to `weak_reference` three
+windows later. A window that comes back unusable is written again once, automatically.
+
+Drop your own `.md` or `.txt` notes into `knowledge/` to have them consulted too; anything in `knowledge/always/` is
+sent with every window. `settings.json` holds the knowledge budget if you want to tune it.
+
+The plugin also adds two things outside the builder: **H3 Prompt Generator** choices in WanGP's own prompt-enhancer
+dropdown for MiniMax H3 models, and three Deepy tools (`minimax_h3_prompt_guide`, `minimax_h3_check_prompt`,
+`minimax_h3_knowledge_search`).
+
+## Reference slots
+
+WanGP takes nine reference images, three reference videos (the `+` and `*` video modes) and three audio references (the `A`, `B` and `D` audio flags). **Reference sources** offers `Picture 1`-`Picture 9`, `Video 1`-`Video 3` and `Audio 1`-`Audio 3`, with six rows so a full set of videos and audio can be declared at once. A draft or saved prompt from an earlier version is upgraded when it loads, with the new rows left blank.

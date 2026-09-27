@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [3.5.0] — 2026-09-27
+
+- Added an optional **Write it with the prompt enhancer** accordion at the foot of the builder. It reads the form
+  above and needs only an idea; the builder is unchanged if it is never opened.
+- Prompts are written with the prompt enhancer already configured in WanGP, guided by the H3 writing guides, with
+  subject wording and retention markers pinned across sliding windows and a single automatic retry for a window that
+  comes back unusable.
+- Added H3 Prompt Generator choices to WanGP's prompt-enhancer dropdown and three Deepy tools.
+- Reference sources now offers `Video 3` and `Audio 3`, matching WanGP's three reference videos and three
+  audio references, and holds six rows so they can all be declared at once. A form saved under the 3.4
+  layout is upgraded on load.
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 

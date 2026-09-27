@@ -225,6 +225,17 @@ _ACTION_LIPS_RE = re.compile(
 CARRY_RECEIVE_TEXT = "The speech carries over from the previous shot."
 
 
+try:
+    from .h3studio.builder_panel import attach_generator_ui
+    from .h3studio.engine import Studio as H3Studio
+    from .h3studio.modes import ALL_MODES as H3_ALL_MODES, Target as H3Target, detect_combat, guess_mode_from_text
+    from .h3studio import lint as h3_lint
+except Exception as _h3_import_error:            # the builder must still load
+    print(f"[MiniMax H3 Prompt Builder] prompt-enhancer generator unavailable: {_h3_import_error}")
+    attach_generator_ui = lambda plugin: None
+    H3Studio = None
+
+
 class EnhancerUnavailable(Exception):
     """Raised with a sentence fit to show the user."""
 
@@ -766,7 +777,7 @@ MAX_SPEAKERS = 6     # how many speaker slots the Speaker dropdown offers
 # Duties a subject owns are declared on the subject, so this only has to
 # cover whole-asset ones - a continued video, a composition anchor, a
 # soundtrack. Four is comfortably more than a normal prompt uses.
-MAX_REFS = 4
+MAX_REFS = 6         # three videos and three audio can all be declared at once
 
 # Visibility updates _clear and _restore_draft return after the field values:
 # one per cast entry, one per entry's reference block, one per
@@ -1144,8 +1155,10 @@ ASSET_KINDS = ["Subject", "Picture", "Video", "Audio"]
 # so these stop at two. The label names the actual slot rather than being
 # auto-numbered, and slots follow upload order - reordering your uploads
 # silently reassigns them.
-REF_VIDEO_SLOTS = ["", "Video 1", "Video 2"]
-REF_AUDIO_SLOTS = ["", "Audio 1", "Audio 2"]
+# WanGP takes three reference videos (the "+" and "*" video modes) and three
+# audio references (the A, B and D audio flags).
+REF_VIDEO_SLOTS = ["", "Video 1", "Video 2", "Video 3"]
+REF_AUDIO_SLOTS = ["", "Audio 1", "Audio 2", "Audio 3"]
 
 # Ref2VA takes up to nine reference images. Offered as plain text because
 # _ref_tags() adds the angle brackets on the way out.
@@ -1427,7 +1440,86 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         self.request_component("state")
         self.request_component("refresh_form_trigger")
         self.request_component("model_choice_target")
+        self._h3_setup()
         self.insert_after("prompt", self.create_ui)
+
+    # -- prompt-enhancer generator -----------------------------------------
+
+    def _h3_setup(self) -> None:
+        """Skill-guided writing through the configured prompt enhancer."""
+        self.h3_studio = None
+        if H3Studio is None:
+            return
+        try:
+            for name in ("get_state_model_type", "get_model_def", "get_model_settings",
+                         "get_current_model_settings", "exec_prompt_enhancer_engine",
+                         "process_prompt_enhancer", "get_prompt_enhancer_choices", "server_config",
+                         "models_def", "get_computed_fps"):
+                self.request_global(name)
+            self.h3_studio = H3Studio(str(Path(__file__).resolve().parent))
+            self.h3_studio.install_hooks()
+            self._h3_register_deepy_tools()
+        except Exception as exc:
+            print(f"[MiniMax H3 Prompt Builder] the generator could not start: {exc}")
+            self.h3_studio = None
+
+    def post_ui_setup(self, components):
+        if self.h3_studio is not None:
+            self.h3_studio.install_hooks(set_global=self.set_global)
+            self.h3_studio.annotate_deepy_infos()
+        return {}
+
+    def _h3_register_deepy_tools(self) -> None:
+        guide_params = {
+            "request": {"description": "The video idea or draft to rewrite."},
+            "mode": {"description": "auto, T2VA, I2VA, FL2VA, L2VA or Ref2VA.",
+                     "enum": ["auto"] + list(H3_ALL_MODES)},
+            "duration_seconds": {"description": "Window length in seconds, 0 if unknown.", "minimum": 0},
+            "window_index": {"description": "1-based window position.", "minimum": 1},
+            "window_count": {"description": "Windows in the sequence.", "minimum": 1},
+        }
+        check_params = {
+            "prompt": {"description": "The H3 prompt; windows separated by one blank line."},
+            "mode": {"description": "auto, T2VA, I2VA, FL2VA, L2VA or Ref2VA.",
+                     "enum": ["auto"] + list(H3_ALL_MODES)},
+            "duration_seconds": {"description": "Window length in seconds, 0 if unknown.", "minimum": 0},
+            "expected_windows": {"description": "Expected window count, 0 if unknown.", "minimum": 0},
+        }
+        search_params = {"query": {"description": "Topic to look up."},
+                         "limit": {"description": "Number of excerpts.", "minimum": 1, "maximum": 8}}
+        for fn, name, display, params in (
+                (self.h3_prompt_guide, "minimax_h3_prompt_guide", "H3 Prompt Guide", guide_params),
+                (self.h3_check_prompt, "minimax_h3_check_prompt", "Check H3 Prompt", check_params),
+                (self.h3_knowledge_search, "minimax_h3_knowledge_search", "Search H3 Knowledge", search_params)):
+            self.register_deepy_prime_tool(fn, name=name, display_name=display, pause_runtime=False)
+            self.register_deepy_zero_tool(fn, name=name, display_name=display, parameters=params,
+                                          pause_runtime=False)
+
+    def h3_prompt_guide(self, request: str, mode: str = "auto", duration_seconds: float = 0.0,
+                        window_index: int = 1, window_count: int = 1) -> dict:
+        """Return the H3 prompt-writing rules relevant to this request. Call before writing an H3 prompt."""
+        mode = next((m for m in H3_ALL_MODES if m.lower() == str(mode or "").lower()), None) \
+            or guess_mode_from_text(request)
+        window_count = max(1, int(window_count or 1))
+        target = H3Target(mode=mode, duration=float(duration_seconds) or None,
+                          window_index=min(max(1, int(window_index or 1)), window_count),
+                          window_count=window_count, combat=detect_combat(request, "auto"))
+        brief = self.h3_studio.brief_for(request, target, "ref2va" if mode == "Ref2VA" else "fl2va",
+                                        purpose="deepy")
+        return {"status": "done", "mode": mode, "combat": target.combat, "sections": brief.included,
+                "guidance": brief.text}
+
+    def h3_check_prompt(self, prompt: str, mode: str = "auto", duration_seconds: float = 0.0,
+                        expected_windows: int = 0) -> dict:
+        """Check an H3 prompt for format errors. Fix every error it reports."""
+        mode = next((m for m in H3_ALL_MODES if m.lower() == str(mode or "").lower()), "auto")
+        return {"status": "done", **h3_lint.check(prompt, mode, float(duration_seconds) or None,
+                                                 int(expected_windows or 0))}
+
+    def h3_knowledge_search(self, query: str, limit: int = 4) -> dict:
+        """Search the H3 guides and the knowledge folder for relevant excerpts."""
+        return {"status": "done",
+                "results": self.h3_studio.library.search(query, max(1, min(8, int(limit or 4))))}
 
     def on_model_change(self, state, model_type) -> None:
         # Notification only - the dispatcher discards whatever this returns,
@@ -2133,6 +2225,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "the default queue setting each window becomes a separate job."
             )
 
+            # ---- optional prompt-enhancer panel ---------------------------
+            # Adds no fields of its own: it reads the form above. Created here
+            # so it sits at the foot of the builder's accordion; wired below,
+            # once the flat list exists.
+            gen_panel = attach_generator_ui(self)
+
         # ---- wiring -------------------------------------------------------
 
         flat = [start_image, end_image,
@@ -2155,6 +2253,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         flat += [task_types, summary_text, action_text]
         flat += [ambience_from, ambience_retention, soundscape,
                  music_from, music_role, music_retention, music]
+
+        if gen_panel is not None:
+            gen_panel.wire(flat)
 
         # Every insert button reads the whole form, so it can resolve a
         # speaker ID or a subject's voice without separate wiring. Its own
@@ -5111,6 +5212,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     # The 3.1 flat list: eleven scene fields, then the five Source video
     # fields, then entry_count and everything after it - none of which moved.
+    # 3.5 widened Reference sources from four rows to six (three videos and
+    # three audio references). Two blank rows go in where they now sit, so a
+    # form saved under 3.4 still loads with every value in its own field.
+    FLAT_LEN_3_4 = 108
+    HEAD_LEN_3_4 = 13   # scene fields plus ref_count
+    REFS_3_4 = 4
     FLAT_LEN_3_1 = 91
     HEAD_LEN_3_1 = 11   # eleven scene fields; 3.2 inserts one more
     VIDEO_ROLES_3_1 = ("none", "continue from it", "edit it",
@@ -5155,6 +5262,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         return out + rest
 
     @classmethod
+    def _migrate_3_4(cls, values):
+        """Four reference rows to six: two blank rows after the last old one."""
+        cut = cls.HEAD_LEN_3_4 + cls.REFS_3_4 * 5
+        blanks = [""] * ((MAX_REFS - cls.REFS_3_4) * 5)
+        return list(values[:cut]) + blanks + list(values[cut:])
+
+    @classmethod
     def _migrate_values(cls, values):
         """
         Bring a saved form up to the current layout.
@@ -5166,6 +5280,14 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         values = list(values)
         if len(values) == cls._flat_len():
             return values, ""
+
+        if len(values) == cls.FLAT_LEN_3_4:
+            upgraded = cls._migrate_3_4(values)
+            if len(upgraded) == cls._flat_len():
+                return upgraded, (
+                    " Upgraded from the 3.4 layout - **Reference sources** now holds "
+                    "six rows, so there is room for three reference videos and three "
+                    "audio references.")
 
         if (len(values) == cls.FLAT_LEN_3_1
                 and cls._s(values[cls.HEAD_LEN_3_1]) in cls.VIDEO_ROLES_3_1):

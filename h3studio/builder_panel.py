@@ -11,6 +11,7 @@ failure in here is caught so it can never take the builder down with it.
 
 from __future__ import annotations
 
+import re
 import time
 
 import gradio as gr
@@ -19,7 +20,7 @@ from shared.gradio.progress import WangpProgress
 
 from . import lint
 from . import spec as spec_mod
-from .modes import Target
+from .modes import ACTION_ROLE, Target
 from .spec import Character, Scene, WindowPlan
 
 BRACKET = ("Picture", "Video", "Audio", "Subject")
@@ -297,4 +298,125 @@ def attach_generator_ui(plugin):
         return GeneratorPanel(plugin).build()
     except Exception as exc:                                  # never break the builder
         print(f"[MiniMax H3 Prompt Builder] prompt-enhancer panel unavailable: {exc}")
+        return None
+
+
+# --------------------------------------------------------------- action box
+FIELD_NAMES = ("integrated_multimodal_description", "detailed_description", "subject_definitions", "summary",
+               "retention_analysis", "overall_soundscape", "non_diegetic_music")
+ALIGNMENT = ("For the target video,", "How the reference pictures align")
+
+
+def strip_to_action(text: str) -> str:
+    """Keep the shot body: drop field headers, definitions, alignment lines and any trailing sections."""
+    cleaned = []
+    for line in (text or "").replace("\r\n", "\n").split("\n"):
+        bare = line.strip()
+        low = bare.lower()
+        if any(low.startswith(name) and (":" in low[:len(name) + 2]) for name in FIELD_NAMES):
+            # A field header: the action stops here unless the body follows on the same line.
+            after = bare.split(":", 1)[1].strip()
+            if after and "[Shot" in after:
+                cleaned.append(after)
+            if any(low.startswith(n) for n in ("overall_soundscape", "non_diegetic_music", "retention_analysis",
+                                               "subject_definitions", "summary")):
+                break
+            continue
+        if any(bare.startswith(a) for a in ALIGNMENT):
+            continue
+        if re.match(r"^<(Subject|Picture|Video|Audio) \d+>\s*(\([^)]*\))?\s*(is|:)", bare):
+            continue
+        if re.match(r"^\s*(```|#{1,6}\s)", bare):
+            continue
+        cleaned.append(line)
+    out = "\n".join(cleaned).strip()
+    start = out.find("[Shot 1]")
+    return out[start:].strip() if start > 0 else out
+
+
+def enhance_action(plugin, state, values, think, progress=None):
+    """Write the Action box from what is typed there plus the form's own fields."""
+    keep = (gr.update(), gr.update())
+    studio = plugin.h3_studio
+    if studio is None:
+        return (*keep, "The generator is not available, so the action cannot be written.")
+    panel = GeneratorPanel(plugin)
+    form = panel._form(values)
+    family = family_of(form)
+    cast = cast_of(form)
+    scene = scene_of(form)
+    typed = _s(form.get("action"))
+    if not typed and not any(c.desc for c in cast) and not scene.lines():
+        return (*keep, "Nothing to work from yet - type the action you want, or fill in the scene and cast above.")
+    mode = mode_of(form)
+    duration = float(form.get("duration") or 0) or None
+    from .modes import detect_combat
+    target = Target(mode=mode, duration=duration, window_index=1, window_count=1,
+                    combat=detect_combat(typed + " " + " ".join(c.desc for c in cast)))
+    brief = studio.library.build_brief(
+        typed or " ".join(c.desc for c in cast),
+        Target(mode="T2VA" if family == "ref2va" else mode, duration=duration, combat=target.combat),
+        budget_tokens=int(studio.settings.get("enhancer_budget_tokens", 10000)),
+        enabled_skills=studio.enabled_skills, contract="", purpose="action", role=ACTION_ROLE)
+    who = spec_mod.spec_block(scene, cast, family)
+    request = []
+    if who:
+        request.append(who)
+    request.append("WHAT THE USER TYPED IN THE ACTION BOX — expand this into the finished action, keeping everything it "
+                   "asks for:\n" + (typed or "(nothing yet: write the action from the scene and cast above)"))
+    prompt = "\n\n".join(request).replace("@", "(at)")
+    system = brief.text + "\n\n" + action_note(target)
+    try:
+        written = studio._run_enhancer(state, [prompt], {prompt: system},
+                                       None, studio.max_tokens("fl2va"), progress, bool(think))
+    except Exception as exc:
+        return (*keep, f"No action written: {exc}")
+    text = strip_to_action(written[0] if written else "")
+    if not text:
+        return (*keep, "The enhancer returned nothing usable, so the action is untouched.")
+    report = lint.check(text, "auto", duration, 1)
+    problems = [e for e in report["errors"] if "missing field" not in e and "not a usable" not in e]
+    note = "**Action written.** Check it before you build."
+    if problems:
+        note += "\n\n" + "\n".join(f"- ⚠️ {p.replace('Window 1: ', '')}" for p in problems[:4])
+    return text, typed, note
+
+
+def action_note(target: Target) -> str:
+    return ("Answer with the action body only. It starts at `[Shot 1]` and ends with the last shot's sentence. "
+            "Nothing before it, nothing after it.")
+
+
+class ActionEnhancer:
+    """The Enhance button beside the builder's Action box."""
+
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def build(self):
+        with gr.Row():
+            self.button = gr.Button("Enhance the action", size="sm")
+            self.think = gr.Checkbox(False, label="Think", scale=0, min_width=90)
+        self.progress = WangpProgress.component()
+        gr.Markdown("Writes the action from what you typed plus the fields above: it knows who the subjects are, "
+                    "which speaker ID each one has and what the scene looks like. Type as little as *three shots, "
+                    "John looks around the street and talks about how it used to be* and it writes the shots, the "
+                    "cuts and the dialogue. **Undo** puts back what was there before.")
+        return self
+
+    def run(self, state, *values, progress=WangpProgress()):
+        return enhance_action(self.plugin, state, values[:-1], values[-1], progress)
+
+    def wire(self, flat, action_out):
+        WangpProgress.bind(self.button.click, self.run,
+                           inputs=[self.plugin.state] + list(flat) + [self.think],
+                           outputs=list(action_out), component=self.progress)
+        return self
+
+
+def attach_action_enhancer(plugin):
+    try:
+        return ActionEnhancer(plugin).build()
+    except Exception as exc:
+        print(f"[MiniMax H3 Prompt Builder] action enhancer unavailable: {exc}")
         return None

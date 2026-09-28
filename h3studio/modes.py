@@ -198,3 +198,50 @@ def checklist(target: Target) -> str:
     items.append("non_diegetic_music is N/A unless a score was requested")
     items.append("no Markdown, no code fence, no commentary")
     return "Before answering, verify: " + "; ".join(items) + "."
+
+
+ACTION_ROLE = (
+    "You write the ACTION of a MiniMax H3 prompt: the shot-by-shot body that goes in the builder's Action box, and "
+    "nothing else.\n"
+    "Take what the user typed and write it out properly. Keep their intent, their order and any shot count, timing, "
+    "camera move or line of dialogue they gave. Fill in what is missing: framing, camera motion, what each subject "
+    "does, what is heard in the scene.\n"
+    "Name subjects by the labels given below and put the speaker ID on their dialogue, so 'John says hello' becomes "
+    "the right label and (S1). Write dialogue as (S1) says: <d>[English] ...</d>, matching each subject's language.\n"
+    "Write only the action body. Never write field names (integrated_multimodal_description, detailed_description, "
+    "subject_definitions, summary, retention_analysis, overall_soundscape, non_diegetic_music), never a picture "
+    "alignment line, never a subject definition or retention marker, no headings, no commentary, no Markdown."
+)
+
+
+def action_block(target: Target) -> str:
+    """What the action writer needs to know about this window."""
+    lines = [f"TARGET: the action of a {target.mode} window."]
+    if target.duration:
+        lines.append(f"It runs {_fmt_seconds(target.duration)} seconds, so every cut time must fall inside that and the "
+                     "last shot must carry the action to the end.")
+    if target.mode == "I2VA":
+        lines.append("[Shot 1] opens on the supplied first frame, so start from what it shows.")
+    elif target.mode == "L2VA":
+        lines.append("The final shot must arrive at the supplied last frame.")
+    elif target.mode == "FL2VA":
+        lines.append("[Shot 1] opens on the supplied first frame and the final shot arrives at the supplied last frame.")
+    if target.continuation:
+        lines.append('This window continues the one before it, so [Shot 1] opens with "The camera cuts to ..." or '
+                     '"The camera continues to ...".')
+    if target.combat:
+        lines.append("The action involves weapon combat: plan the choreography from the combat excerpts below.")
+    lines.append("[Shot 1] carries no timestamp. Every later shot begins `[Shot N] At MM:SS.mmm, the camera cuts to ...` "
+                 "with times that rise and stay inside the duration.")
+    return "\n".join(lines)
+
+
+def action_checklist(target: Target) -> str:
+    items = ["the answer is only the action body: no field names, no headings, no commentary",
+             "[Shot 1] has no timestamp; later shots read `[Shot N] At MM:SS.mmm, the camera cuts to ...`",
+             "every cut adds new subject, space, state, viewpoint or time information",
+             "subjects are named by their given labels and speak under their own speaker IDs",
+             "spoken words sit inside <d>[Language] ...</d> and nowhere else"]
+    if target.duration:
+        items.append(f"no timestamp reaches or passes {_fmt_seconds(target.duration)} seconds")
+    return "Before answering, verify: " + "; ".join(items) + "."

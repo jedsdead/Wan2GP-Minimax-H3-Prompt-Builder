@@ -226,13 +226,14 @@ CARRY_RECEIVE_TEXT = "The speech carries over from the previous shot."
 
 
 try:
-    from .h3studio.builder_panel import attach_generator_ui
+    from .h3studio.builder_panel import attach_action_enhancer, attach_generator_ui
     from .h3studio.engine import Studio as H3Studio
     from .h3studio.modes import ALL_MODES as H3_ALL_MODES, Target as H3Target, detect_combat, guess_mode_from_text
     from .h3studio import lint as h3_lint
 except Exception as _h3_import_error:            # the builder must still load
     print(f"[MiniMax H3 Prompt Builder] prompt-enhancer generator unavailable: {_h3_import_error}")
     attach_generator_ui = lambda plugin: None
+    attach_action_enhancer = lambda plugin: None
     H3Studio = None
 
 
@@ -1975,6 +1976,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 action_prev = gr.State("")
                 action_status = gr.Markdown("")
 
+                # Writes the action from the form, like the audio fields'
+                # own suggestion buttons. Wired below, with the flat list.
+                action_enhancer = attach_action_enhancer(self)
+
                 with gr.Row():
                     ins_shot = gr.Button("Shot", size="sm", variant="primary")
                     at_seconds = gr.Number(
@@ -2262,6 +2267,9 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # controls ride on the end, which is why the handlers slice from the
         # back rather than the front.
         action_out = [action_text, action_prev, action_status]
+
+        if action_enhancer is not None:
+            action_enhancer.wire(flat, action_out)
 
         ins_shot.click(fn=self._insert_shot, inputs=flat, outputs=action_out)
         ins_time.click(fn=self._insert_time, inputs=flat + [at_seconds],

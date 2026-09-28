@@ -812,3 +812,22 @@ dropdown for MiniMax H3 models, and three Deepy tools (`minimax_h3_prompt_guide`
 ## Reference slots
 
 WanGP takes nine reference images, three reference videos (the `+` and `*` video modes) and three audio references (the `A`, `B` and `D` audio flags). **Reference sources** offers `Picture 1`-`Picture 9`, `Video 1`-`Video 3` and `Audio 1`-`Audio 3`, with six rows so a full set of videos and audio can be declared at once. A draft or saved prompt from an earlier version is upgraded when it loads, with the new rows left blank.
+
+## Enhance the action
+
+Beneath the Action box is **Enhance the action**, working like the soundscape and score suggestion buttons: it reads
+the whole form and writes the Action box with the prompt enhancer configured in WanGP.
+
+Because it reads the cast, it knows who people are. Type
+
+    three shots, John looks around the street and talks about how it's not like it was in the old days
+
+and with John filled in as a subject with speaker ID S1, it comes back as three shots with cuts and timings, the
+dialogue written as `(S1) says: <d>[English] ...</d>`, and John referred to by his label in Ref2VA. Fill in the scene,
+camera and cast and leave the action thin, and it fills in the rest; give it detail and it keeps your shot count,
+timings, camera moves and lines.
+
+It writes the action body only. Field names, subject definitions, retention analysis, soundscape, score and the
+picture-alignment line belong to the rest of the form and are stripped if the writer volunteers them. **Undo** puts
+back what was there before.
+

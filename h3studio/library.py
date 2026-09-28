@@ -22,7 +22,7 @@ import threading
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .modes import BASE_MODES, Target, checklist, target_block
+from .modes import BASE_MODES, Target, action_checklist, action_block, checklist, target_block
 from .textchunks import Section, descendants, parse_sections, selector_matches, strip_front_matter
 
 TEXT_EXTENSIONS = (".md", ".txt", ".markdown")
@@ -333,7 +333,7 @@ class Library:
                 ranked.append(pick)
 
         head = self._head(target, contract, role, purpose)
-        tail = checklist(target)
+        tail = action_checklist(target) if purpose == "action" else checklist(target)
         budget_chars = int(budget_tokens * CHARS_PER_TOKEN) - len(head) - len(tail) - 200
         if budget_chars < 0:
             warnings.append("Budget is smaller than the mode contract itself; raise the token budget.")
@@ -376,13 +376,16 @@ class Library:
             parts.append(role.strip())
         if contract:
             parts.append(contract.strip())
-        parts.append(target_block(target))
+        parts.append(action_block(target) if purpose == "action" else target_block(target))
         parts.append(
             "REFERENCE KNOWLEDGE follows. It is authoritative on field names, section order, labels and timing "
             "notation, and overrides anything remembered. Mentions of files such as references/base-en.txt point to "
             "the excerpts below; if an excerpt is absent, apply the rule as stated. Never mention files or this brief "
             "in the output. When sources conflict: the user's explicit request wins, then the mode guide on format, "
             "then the specialist guide on content." if purpose == "enhancer" else
+            "REFERENCE KNOWLEDGE on writing shots, cuts, camera work and dialogue follows. It is authoritative on "
+            "notation. Take only what applies to the action itself; ignore anything about fields, sections or the "
+            "shape of a whole prompt." if purpose == "action" else
             "REFERENCE KNOWLEDGE for writing this H3 prompt follows. It is authoritative on notation and overrides memory. "
             "Mentions of files point to the excerpts below."
         )

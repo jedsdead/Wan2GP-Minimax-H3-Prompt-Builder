@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [3.5.2] — 2026-09-27
+
+- Fixed the `(appears in ...)` scope in retention_analysis. The shots a subject appears in were read line by
+  line, so an action written as one paragraph - several `[Shot N]` markers on the same line - filed every
+  subject and speaker tag under the first shot. The action is now split on the shot markers themselves, so
+  the scope is right whether each shot is on its own line or not.
+
 ## [3.5.1] — 2026-09-27
 
 - Added **Enhance the action**: writes the Action box from what you typed plus the form's own fields, so a line

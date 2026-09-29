@@ -3942,15 +3942,19 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                                        re.I))
         if not patterns:
             return []
-        found, current = [], None
-        for line in (action or "").split("\n"):
-            m = _ACTION_SHOT_RE.search(line)
-            if m:
-                current = int(m.group(1))
-            if not current or current in found:
+        # Split on the shot markers themselves rather than on lines: a
+        # written-out action often holds every shot in one paragraph, and
+        # reading line by line would file all of them under the first.
+        text = action or ""
+        marks = list(_ACTION_SHOT_RE.finditer(text))
+        found = []
+        for i, m in enumerate(marks):
+            number = int(m.group(1))
+            if number in found:
                 continue
-            if any(p.search(line) for p in patterns):
-                found.append(current)
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+            if any(p.search(text[m.end():end]) for p in patterns):
+                found.append(number)
         return found
 
     @classmethod

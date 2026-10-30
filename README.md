@@ -831,3 +831,23 @@ It writes the action body only. Field names, subject definitions, retention anal
 picture-alignment line belong to the rest of the form and are stripped if the writer volunteers them. **Undo** puts
 back what was there before.
 
+## Two places to build
+
+The builder runs **under the prompt box** and on **its own tab**, with the same options in both. On the tab the sections - Mode & keyframes, Scene, Cast & subjects, Reference task, Action, Audio, Summary - are tabs rather than folds, so there is room to work without scrolling.
+
+Each copy holds its own fields. They are not kept in step as you type, which would mean a round trip to the server on every edit; instead each has a button at the foot that hands its whole form to the other: **Send these fields to the H3 Builder tab** and **Send these fields to the inline builder**. Whatever is in the receiving copy is replaced.
+
+The tab also carries an editable **preview of the finished prompt**. **Insert into prompt** and both **Append** buttons fill it alongside the prompt box, so you can read the whole window in one place, edit it there, and put it back with **Overwrite the prompt box with this**.
+
+Under a model that is not MiniMax H3 the inline fold hides itself as before; the tab keeps its fields and says to switch models before generating.
+
+## Compatibility
+
+Checked against WanGP as of 30 October 2026 (commit a504252): the plugin API, the prompt-enhancer entry points, the
+H3 model definitions, the three video and three audio reference slots, and H3's window figures (107-frame minimum,
+481-frame cap, 18-frame overlap, 24 fps) all still match. The generator uses enhancer profile 8, which does not
+collide with WanGP's own profile 1 (the still-image and dialogue prompts).
+
+Two notes for the newer families: the **control** family (pose, depth, edge driving) caps a window at 362 frames
+rather than 481 and prefers a 22-frame overlap, so the window warnings here are generous for it; and WanGP's
+`/no_end_image` command is accepted but not offered by the builder's own buttons.

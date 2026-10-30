@@ -48,6 +48,7 @@ KNOWN SHAPE
     long generation.
 """
 
+import contextlib
 import gc
 import json
 import re
@@ -1442,7 +1443,10 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         self.request_component("refresh_form_trigger")
         self.request_component("model_choice_target")
         self._h3_setup()
+        self._ui_copies = []
         self.insert_after("prompt", self.create_ui)
+        self.add_tab(tab_id="h3_prompt_builder_tab", label="H3 Builder",
+                     component_constructor=lambda: self.create_ui(inline=False))
 
     # -- prompt-enhancer generator -----------------------------------------
 
@@ -1534,12 +1538,26 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
     # -- UI ----------------------------------------------------------------
 
-    def create_ui(self):
+    @staticmethod
+    def _section(inline, title, open=False, **kw):
+        """A fold inline, a tab of its own on the tab."""
+        if inline:
+            return gr.Accordion(title, open=open, **kw)
+        return gr.Tab(title, **kw)
+
+    @staticmethod
+    def _also_preview(result):
+        """Insert and Append fill the tab's preview with what they wrote."""
+        text, status = result[0], result[1]
+        return text, status, text
+
+    def create_ui(self, inline: bool = True):
         """
-        Called by PluginManager inside the prompt component's live parent
-        context. Everything must be created inside the single accordion
-        below: insert_after does parent.children.pop(-1) and assumes the
-        constructor added exactly one top-level child.
+        Built twice: inline under the prompt box (inline=True), where
+        insert_after does parent.children.pop(-1) and so everything must
+        sit inside the single accordion below; and on its own tab
+        (inline=False), where the sections become tabs of their own and
+        there is room for a preview of the finished prompt.
         """
         entries, char_names = [], []
 
@@ -1562,9 +1580,13 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         # was selected at startup until the first switch fired the toggle.
         start_visible = self._starts_visible()
 
-        with gr.Accordion("MiniMax H3 Prompt Builder", open=False,
-                          visible=start_visible,
-                          elem_id="h3_prompt_builder") as root:
+        shell = (gr.Accordion("MiniMax H3 Prompt Builder", open=False,
+                              visible=start_visible,
+                              elem_id="h3_prompt_builder")
+                 if inline else
+                 gr.Column(visible=True,
+                           elem_id="h3_prompt_builder_tab"))
+        with shell as root:
 
             model_warning = gr.Markdown(visible=False)
 
@@ -1615,7 +1637,11 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # only the defaults - Gradio remembers nothing between sessions,
             # so they are set to what a first build needs rather than to
             # what is used most.
-            with gr.Accordion("Mode & keyframes", open=False):
+            sections = contextlib.ExitStack()
+            if not inline:
+                sections.enter_context(gr.Tabs())
+
+            with self._section(inline, "Mode & keyframes"):
                 gr.Markdown(KEYFRAME_NOTE)
 
                 with gr.Row():
@@ -1630,7 +1656,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                          "written.",
                 )
 
-            with gr.Accordion("Scene", open=False):
+            with self._section(inline, "Scene"):
                 gr.Markdown(
                     "What holds for the whole clip. These become the single "
                     "opening sentence before `[Shot 1]`. Lens and rig are "
@@ -1657,7 +1683,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             # ---- source video (FL2VA continue / Ref2VA video reference) ----
             # ---- cast and subjects (one list) ------------------------------
-            with gr.Accordion("Cast & subjects", open=False):
+            with self._section(inline, "Cast & subjects"):
                 gr.Markdown(
                     "Everything that appears - people, animals, places, props. "
                     "Each entry becomes a `<Subject N>` definition, and the "
@@ -1850,8 +1876,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     inputs=[entry_count], outputs=_entry_out,
                 )
 
-            with gr.Accordion("Reference task", open=False,
-                              visible=False) as ref_task_section:
+            with self._section(inline, "Reference task",
+                               visible=False) as ref_task_section:
                 gr.Markdown(
                     "Only needed when reference assets are involved. The task "
                     "type tells the model what kind of job this is, and is "
@@ -1957,7 +1983,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 )
 
 
-            with gr.Accordion("Action", open=True):
+            with self._section(inline, "Action", open=True):
                 gr.Markdown(
                     "Write the action here. The buttons insert labels, "
                     "timestamps, camera sentences and dialogue in the format "
@@ -2080,7 +2106,7 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     undo_action = gr.Button("Undo last insert", size="sm")
 
             # ---- audio -----------------------------------------------------
-            with gr.Accordion("Audio", open=False):
+            with self._section(inline, "Audio"):
                 # The box is the field. The presets are a way of filling it
                 # in, not a second input that gets merged at build time -
                 # which also means what you read here is exactly what the
@@ -2159,8 +2185,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
 
             status = gr.Markdown("")
 
-            with gr.Accordion("Summary", open=False,
-                              visible=False) as summary_block:
+            with self._section(inline, "Summary",
+                               visible=False) as summary_block:
                 gr.Markdown(
                     "The summary is a reference-mode section. Base modes have "
                     "no summary field, so it is not written when reference "
@@ -2191,6 +2217,8 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             # built has nothing to do with where it sits in the flat input
             # list below, so moving it here costs nothing: the flat list,
             # _unpack, _clear and _restore_draft are all untouched.
+            sections.close()
+
             with gr.Row():
                 duration = gr.Number(
                     label="Length of this window (seconds)",
@@ -2213,6 +2241,25 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             with gr.Row():
                 clear_action_btn = gr.Button("Clear the action")
                 clear_btn = gr.Button("Clear all fields")
+
+            # The two copies hold their own fields. This hands the whole
+            # form over rather than keeping them in step keystroke by
+            # keystroke, which would mean a round trip on every edit.
+            with gr.Row():
+                link_btn = gr.Button("Send these fields to the H3 Builder tab"
+                                     if inline else
+                                     "Send these fields to the inline builder")
+            link_status = gr.Markdown("")
+
+            preview = preview_btn = None
+            if not inline:
+                preview = gr.Textbox(
+                    lines=12, label="The finished prompt (editable)",
+                    show_copy_button=True,
+                    info="Insert and the Append buttons fill this as well as the "
+                         "prompt box. Edit it here and put it back with the button "
+                         "below.")
+                preview_btn = gr.Button("Overwrite the prompt box with this")
 
             gr.Markdown(
                 "**Insert into prompt** replaces the box. The two **Append** "
@@ -2314,17 +2361,32 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             outputs=[music, audio_status],
         )
 
-        insert_btn.click(fn=self._build, inputs=flat,
-                         outputs=[self.prompt, status])
+        if preview is None:
+            insert_btn.click(fn=self._build, inputs=flat,
+                             outputs=[self.prompt, status])
+        else:
+            insert_btn.click(fn=lambda *v: self._also_preview(self._build(*v)),
+                             inputs=flat, outputs=[self.prompt, status, preview])
+            preview_btn.click(
+                fn=lambda text: (text, "Prompt box overwritten from the preview."),
+                inputs=[preview], outputs=[self.prompt, status])
 
         # Two buttons rather than a join field: they stay out of the flat
         # list, so the count and the four sites that read it do not move.
-        append_cont_btn.click(fn=self._append_continuing,
-                              inputs=[self.prompt] + flat,
-                              outputs=[self.prompt, status])
-        append_cut_btn.click(fn=self._append_cut,
-                             inputs=[self.prompt] + flat,
-                             outputs=[self.prompt, status])
+        if preview is None:
+            append_cont_btn.click(fn=self._append_continuing,
+                                  inputs=[self.prompt] + flat,
+                                  outputs=[self.prompt, status])
+            append_cut_btn.click(fn=self._append_cut,
+                                 inputs=[self.prompt] + flat,
+                                 outputs=[self.prompt, status])
+        else:
+            append_cont_btn.click(
+                fn=lambda *v: self._also_preview(self._append_continuing(*v)),
+                inputs=[self.prompt] + flat, outputs=[self.prompt, status, preview])
+            append_cut_btn.click(
+                fn=lambda *v: self._also_preview(self._append_cut(*v)),
+                inputs=[self.prompt] + flat, outputs=[self.prompt, status, preview])
 
         # One switch for everything Ref2VA. Values in a hidden block are
         # ignored by the assembly too, so nothing can leak in.
@@ -2497,7 +2559,12 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                     outputs=[dl_who, cam_subject],
                 )
 
-        self._wire_model_visibility(root, model_warning)
+        self._wire_model_visibility(root, model_warning, inline=inline)
+
+        self._ui_copies.append({"inline": inline, "flat": flat, "link": link_btn,
+                               "status": link_status})
+        if len(self._ui_copies) == 2:
+            self._wire_field_handover(*self._ui_copies)
 
     @staticmethod
     def _startup_model_type():
@@ -2551,7 +2618,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
             getattr(self, name, None) is not None
             for name in ("refresh_form_trigger", "model_choice_target"))
 
-    def _wire_model_visibility(self, root, warning):
+    @staticmethod
+    def _wire_field_handover(first, second):
+        """Each copy's button hands its whole form to the other one."""
+        for source, target in ((first, second), (second, first)):
+            where = "the H3 Builder tab" if target["inline"] is False else "the inline builder"
+            note = f"Fields sent to {where}."
+            source["link"].click(
+                fn=lambda *values, _note=note: list(values) + [_note],
+                inputs=source["flat"],
+                outputs=target["flat"] + [source["status"]])
+
+    def _wire_model_visibility(self, root, warning, inline=True):
         """
         Hide the builder unless a MiniMax H3 model is selected.
 
@@ -2595,7 +2673,18 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 model_type = str(st.get("model_type", "") or "")
             model_type = model_type or self.current_model_type
             is_h3 = any(h in model_type.lower() for h in H3_MODEL_HINTS)
-            return gr.update(visible=is_h3), gr.update(visible=False)
+            if inline:
+                # Under the prompt box the whole fold goes away for a
+                # model it cannot write for.
+                return gr.update(visible=is_h3), gr.update(visible=False)
+            # On its own tab an empty page is just confusing, so the
+            # fields stay and the warning says what is wrong.
+            return gr.update(visible=True), gr.update(
+                visible=not is_h3,
+                value="" if is_h3 else
+                "The selected model is not a MiniMax H3 one. Build here by all "
+                "means - **Insert into prompt** still writes to the prompt box - "
+                "but switch to an H3 model before generating.")
 
         for trigger in triggers:
             try:
@@ -3189,11 +3278,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
         if presence == "off-screen":
             parts.append("heard off-screen")
         return " ".join(parts)
-
-    @staticmethod
-    def _article(phrase):
-        """"a" or "an" for a phrase we are assembling rather than storing."""
-        return "an" if (phrase or "")[:1].lower() in "aeiou" else "a"
 
     @classmethod
     def _shot_phrase(cls, framing, rig):
@@ -5202,7 +5286,6 @@ class H3PromptBuilderPlugin(WAN2GPPlugin):
                 "Restore it before you start typing - once there is something "
                 "in the form it gets saved over the top of this one.")
 
-    @classmethod
     @classmethod
     def _unchanged_form(cls, note):
         """Write nothing anywhere and say why - a refusal, not an error."""

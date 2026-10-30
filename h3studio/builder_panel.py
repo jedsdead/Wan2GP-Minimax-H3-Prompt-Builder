@@ -12,7 +12,6 @@ failure in here is caught so it can never take the builder down with it.
 from __future__ import annotations
 
 import re
-import time
 
 import gradio as gr
 
@@ -232,6 +231,9 @@ class GeneratorPanel:
         return form, family, cast, plans, spec_text
 
     def generate(self, *args, progress=WangpProgress()):
+        if self.studio is None:
+            raise gr.Error("The generator did not load, so the prompt cannot be written here. "
+                           "Build it with the buttons above instead.")
         state, values = args[0], args[1:-4]
         idea, use_form, use_action, think = args[-4], args[-3], args[-2], args[-1]
         form, family, cast, plans, spec_text = self._assemble(state, values, idea, use_form, use_action)
@@ -308,18 +310,25 @@ ALIGNMENT = ("For the target video,", "How the reference pictures align")
 
 
 def strip_to_action(text: str) -> str:
-    """Keep the shot body: drop field headers, definitions, alignment lines and any trailing sections."""
-    cleaned = []
+    """Keep the shot body: drop field headers, definitions, alignment lines and any trailing sections.
+
+    In Ref2VA the writer often answers with the whole six-section prompt, and
+    subject_definitions, summary and retention_analysis come *before* the
+    action. So a field header only ends the action once the shots have begun;
+    before that it is just skipped.
+    """
+    cleaned, started = [], False
     for line in (text or "").replace("\r\n", "\n").split("\n"):
         bare = line.strip()
         low = bare.lower()
-        if any(low.startswith(name) and (":" in low[:len(name) + 2]) for name in FIELD_NAMES):
-            # A field header: the action stops here unless the body follows on the same line.
+        header = next((name for name in FIELD_NAMES
+                       if low.startswith(name) and ":" in low[:len(name) + 2]), None)
+        if header:
             after = bare.split(":", 1)[1].strip()
-            if after and "[Shot" in after:
+            if after and "[Shot" in after:      # "detailed_description: [Shot 1] ..."
                 cleaned.append(after)
-            if any(low.startswith(n) for n in ("overall_soundscape", "non_diegetic_music", "retention_analysis",
-                                               "subject_definitions", "summary")):
+                started = True
+            elif started:                        # a section after the action: stop here
                 break
             continue
         if any(bare.startswith(a) for a in ALIGNMENT):
@@ -328,6 +337,8 @@ def strip_to_action(text: str) -> str:
             continue
         if re.match(r"^\s*(```|#{1,6}\s)", bare):
             continue
+        if "[Shot" in bare:
+            started = True
         cleaned.append(line)
     out = "\n".join(cleaned).strip()
     start = out.find("[Shot 1]")

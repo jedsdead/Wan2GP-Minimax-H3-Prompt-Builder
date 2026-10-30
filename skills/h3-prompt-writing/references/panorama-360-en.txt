@@ -1,0 +1,128 @@
+360 PANORAMA LOCATION REFERENCES (Ref2VA)
+
+Use this guide whenever a reference image is a 360-degree (equirectangular) panorama
+of a location. It governs how the panorama is defined, how shots are anchored in it
+and how spatial consistency is kept across shots and sliding windows. ref-en.txt still
+governs labels, section order and retention markers; base-en.txt still governs shots,
+camera vocabulary and dialogue.
+
+1. HOW H3 TREATS A PANORAMA
+
+A panorama is a map of a place, not a frame. Left undirected, the model tends to
+paste the whole stretched panorama into the video, most often in the first shot and
+whenever a shot is only called "wide". Every instruction below exists to make the
+model film ordinary perspective views from inside the location, one direction at a
+time, while keeping every landmark where the panorama puts it.
+
+2. DEFINE THE PANORAMA WITH THE DEWARP SENTENCE
+
+In subject_definitions, name the image as a 360 panorama, say what it depicts, and
+state explicitly that it is dewarped into a flat rectilinear view. This sentence
+comes from a community-tested prompt and is the single most important line:
+
+  <Subject 1> is the [location] shown in <Picture 1>, a 360 panorama reference
+  depicting the overall look of the location and the position of its key objects.
+  For the target video the picture is dewarped and remapped into a flat rectilinear
+  lens projection view; the full panorama never appears as a frame.
+
+Then list the landmarks (see section 3). Repeat the dewarp idea in two more places:
+
+- retention_analysis: "<Subject 1> (appears in every shot): fully_preserved - filmed
+  as flat rectilinear views dewarped from the 360 panorama in <Picture 1>, each shot
+  showing only the part that lies in the direction the camera faces, with every
+  landmark in its original position relative to the others."
+- The opening of detailed_description, as a camera rule: an ordinary perspective
+  cinema camera standing inside the location, a natural field of view of about
+  40 degrees, a flat horizon and straight vertical lines; the curved, stretched
+  panorama layout is never reproduced.
+
+3. BUILD A DIRECTION MAP FROM THE IMAGE
+
+In an equirectangular image, horizontal position is direction (yaw):
+
+  image center         = straight ahead   (call it north, or 0 degrees)
+  halfway to the right = 90 degrees right (east)
+  halfway to the left  = 90 degrees left  (west)
+  left and right edges = directly behind  (south, 180 degrees; the edges join)
+  top / bottom         = straight up / straight down
+
+Before writing any shot, list the landmarks in each direction: the dominant
+structure, doors, stairs, railings, edges and drops, props on the floor, the view
+beyond each side, and the sun or main light. Write this as one fixed paragraph and
+repeat it word for word in every shot list and every sliding window, for example:
+
+  Spatial layout, fixed for every shot: the carved tower is north; the two spires
+  with staircases are north-west and north-east; the sun sits low in the
+  north-north-west so that anything facing it is backlit, and shadows stretch to the
+  south-east; the east railing overlooks the city canyon; the south railing
+  overlooks the skyline.
+
+4. ANCHOR EVERY SHOT TWICE
+
+Give each shot both anchors:
+
+- Direction: "the camera faces north-east", "a reverse shot facing south".
+- Image region: "the two grey doors on the right side of <Picture 1>", "the gate
+  near the right edge of <Picture 1>". Image-region anchors point the model at
+  exact pixels of the reference and are very reliable for the first shot.
+
+Describe only what lies in that direction. In a reverse shot, the landmarks behind
+the characters must be the ones opposite on the map.
+
+5. MOVE THE CAMERA IN DEGREES
+
+Camera moves that travel around the panorama should state the rotation and what is
+revealed: "the camera pans left by 90 degrees from the tower to the west railing",
+"the camera pans left by 180 degrees, revealing the far end of the corridor behind".
+The direction of the pan must agree with the map (panning left from north reaches
+west). Degree-based pans are the cleanest way to show the space in one continuous
+shot.
+
+6. NEVER OPEN ON AN UNFRAMED WIDE
+
+Never begin a video or a window with a bare "wide shot" of the location, and never
+write "the whole arena" or "the full rooftop". Open with a medium or medium-wide
+shot that names the direction, the image region and the edges of the frame, for
+example: "A medium-wide, eye-level shot facing due north frames only the lower half
+of the tower with its doorway, the base of the north-west spire just entering the
+left edge, with no sky above the tower's upper floors." Naming what sits at the
+frame edges gives the model a place to stop. A character in the foreground (seen
+over the shoulder, or a hand on a prop) makes a pasted panorama even less likely.
+If it still happens, crop a normal 16:9 view in the opening direction and add it as
+a second picture for the first shot.
+
+7. LIGHT MUST MATCH THE DIRECTION
+
+Fix the sun or key light to a direction on the map. A camera facing the light sees
+silhouettes or rim light; a camera with the light behind it sees lit faces. Keep
+shadow direction constant. Check every shot against this before finalising.
+
+8. MOVING ELEMENTS AND PEOPLE IN THE PANORAMA
+
+Decide explicitly what happens to everything alive in the image:
+- Traffic, crowds, flags, smoke, water: keep them moving at a stated, steady pace in
+  every shot ("airspeeders drift slowly and steadily along their paths").
+- Background figures: either keep them in their mapped positions and say how they
+  behave (react without approaching, intervening or speaking; lips closed), or
+  remove them and mark retention partially_preserved with the reason.
+
+9. SLIDING WINDOWS
+
+In Wan2GP sequences, repeat the subject definition, the dewarp sentence, the camera
+rule and the spatial layout paragraph in every window, since each window is its own
+generation. End each window except the last on a framed wide that names its
+direction ("a wide shot facing east of the two fighters at the east railing"), so
+the overlap latches onto a known view. Keep the action moving through the map in a
+clear route (for example tower, west stairs, plaza, south-east hatches, east
+railing) so the space reads as one place.
+
+10. QUALITY CHECK
+
+- Does subject_definitions call it a 360 panorama and include the dewarp sentence?
+- Does every window repeat the camera rule and the spatial layout paragraph?
+- Is the first shot framed, directional and bounded, with no bare "wide"?
+- Does every shot state the direction the camera faces, and only show landmarks
+  from that direction?
+- Are reverse shots and pans consistent with the map?
+- Does lighting match each camera direction?
+- Are moving elements and background figures accounted for?

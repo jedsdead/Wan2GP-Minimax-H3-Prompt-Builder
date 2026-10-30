@@ -1,12 +1,15 @@
 {
   "_doc": "Encodes the SKILL.md workflow for a single-shot writer. Required sections are listed most-important first: if the token budget is tight, later entries are dropped first. Selectors after # match section titles by prefix (e.g. '4.2', 'XVII', 'Points Most').",
   "always": [
+    "SKILL.md#The user's standing rules for sequences",
     "SKILL.md#Points Most Often Got Wrong",
     "SKILL.md#Output Rules"
   ],
   "rules": [
     {
-      "when": {"mode": "base"},
+      "when": {
+        "mode": "base"
+      },
       "include": [
         "references/base-en.txt#2",
         "references/base-en.txt#4.1",
@@ -17,15 +20,62 @@
         "references/base-en.txt#4.7",
         "references/base-en.txt#4.5"
       ],
-      "optional": ["SKILL.md#Tips for Better Results", "SKILL.md#Base Modes"]
+      "optional": [
+        "SKILL.md#Tips for Better Results",
+        "SKILL.md#Base Modes"
+      ]
     },
-    {"when": {"mode": "I2VA"}, "include": ["references/base-en.txt#3.1"], "optional": ["references/base-en.txt#Case 2"], "boost": 6},
-    {"when": {"mode": "FL2VA"}, "include": ["references/base-en.txt#3.2"], "optional": ["references/base-en.txt#Case 3"], "boost": 6},
-    {"when": {"mode": "L2VA"}, "include": ["references/base-en.txt#3.3"], "optional": ["references/base-en.txt#Case 4"], "boost": 6},
-    {"when": {"mode": "T2VA"}, "optional": ["references/base-en.txt#Case 1"], "boost": 6},
     {
-      "when": {"mode": "Ref2VA"},
+      "when": {
+        "mode": "I2VA"
+      },
       "include": [
+        "references/base-en.txt#3.1"
+      ],
+      "optional": [
+        "references/base-en.txt#Case 2"
+      ],
+      "boost": 6
+    },
+    {
+      "when": {
+        "mode": "FL2VA"
+      },
+      "include": [
+        "references/base-en.txt#3.2"
+      ],
+      "optional": [
+        "references/base-en.txt#Case 3"
+      ],
+      "boost": 6
+    },
+    {
+      "when": {
+        "mode": "L2VA"
+      },
+      "include": [
+        "references/base-en.txt#3.3"
+      ],
+      "optional": [
+        "references/base-en.txt#Case 4"
+      ],
+      "boost": 6
+    },
+    {
+      "when": {
+        "mode": "T2VA"
+      },
+      "optional": [
+        "references/base-en.txt#Case 1"
+      ],
+      "boost": 6
+    },
+    {
+      "when": {
+        "mode": "Ref2VA"
+      },
+      "include": [
+        "SKILL.md#Reference Prompts: Default Format",
         "references/ref-en.txt#1",
         "references/ref-en.txt#2",
         "references/ref-en.txt#3",
@@ -36,11 +86,29 @@
         "references/base-en.txt#4.3",
         "references/base-en.txt#4.4"
       ],
-      "optional": ["references/ref-en.txt#7", "SKILL.md#Full-Reference Mode", "SKILL.md#Tips for Better Results"],
+      "optional": [
+        "references/ref-en.txt#7",
+        "SKILL.md#Full-Reference Mode",
+        "SKILL.md#Tips for Better Results"
+      ],
       "boost": 4
     },
     {
-      "when": {"sliding_window": true},
+      "when": {
+        "mode": "Ref2VA",
+        "keywords": [
+          "refmod",
+          "refmods"
+        ]
+      },
+      "include": [
+        "SKILL.md#RefMods"
+      ]
+    },
+    {
+      "when": {
+        "sliding_window": true
+      },
       "include": [
         "SKILL.md#Every window after the first opens with a continuity verb",
         "SKILL.md#Never end a window on an underdetermined frame",
@@ -48,24 +116,65 @@
       ]
     },
     {
-      "when": {"combat": true},
+      "when": {
+        "combat": true,
+        "keywords": [
+          "unarmed",
+          "fists",
+          "fist",
+          "punch",
+          "punches",
+          "kick",
+          "kicks",
+          "brawl",
+          "hand-to-hand",
+          "martial",
+          "kung fu",
+          "grapple",
+          "throw",
+          "outnumbered",
+          "gang",
+          "mob",
+          "henchmen",
+          "thugs",
+          "crowd",
+          "many",
+          "group"
+        ]
+      },
+      "include": [
+        "SKILL.md#Unarmed and Multi-Opponent Combat",
+        "references/multi-opponent-combat-en.txt#HIGHEST PRIORITY RULES",
+        "references/multi-opponent-combat-en.txt#OUTPUT REQUIREMENTS"
+      ],
+      "optional": [
+        "references/multi-opponent-combat-en.txt#\"JACKIE CHAN-STYLE 1-VS-MANY\" DIRECTORIAL LOGIC"
+      ],
+      "boost": 3
+    },
+    {
+      "when": {
+        "combat": true
+      },
       "include": [
         "SKILL.md#Weapon Combat",
         "references/weapon-combat-en.txt#I",
         "references/weapon-combat-en.txt#II",
         "references/weapon-combat-en.txt#IV",
-        "references/weapon-combat-en.txt#V",
         "references/weapon-combat-en.txt#VII",
-        "references/weapon-combat-en.txt#XIII",
         "references/weapon-combat-en.txt#XVII",
-        "references/weapon-combat-en.txt#XIX",
+        "references/weapon-combat-en.txt#XIX"
+      ],
+      "optional": [
+        "SKILL.md#Combat Base V2 writing rules",
+        "SKILL.md#Prompt layout tested with these LoRAs",
+        "references/weapon-combat-en.txt#V",
+        "references/weapon-combat-en.txt#XIII",
         "references/weapon-combat-en.txt#III",
         "references/weapon-combat-en.txt#VIII",
         "references/weapon-combat-en.txt#X",
         "references/weapon-combat-en.txt#XIV",
-        "references/weapon-combat-en.txt#XVIII"
-      ],
-      "optional": [
+        "references/weapon-combat-en.txt#XVIII",
         "references/weapon-combat-en.txt#VI",
         "references/weapon-combat-en.txt#XII",
         "references/weapon-combat-en.txt#XXIII",
@@ -75,19 +184,56 @@
       "boost": 2
     },
     {
-      "when": {"combat": true, "keywords": ["execution", "executes", "execute", "behead", "beheads", "finishing blow", "coup de grace"]},
-      "include": ["references/weapon-combat-en.txt#XI"]
+      "when": {
+        "combat": true,
+        "keywords": [
+          "execution",
+          "executes",
+          "execute",
+          "behead",
+          "beheads",
+          "finishing blow",
+          "coup de grace"
+        ]
+      },
+      "include": [
+        "references/weapon-combat-en.txt#XI"
+      ]
+    },
+    {
+      "when": {
+        "keywords": [
+          "360",
+          "panorama",
+          "panoramic",
+          "equirectangular",
+          "vr",
+          "immersive sphere"
+        ]
+      },
+      "include": [
+        "references/panorama-360-en.txt"
+      ],
+      "boost": 4
     }
   ],
   "exclude": [
     "SKILL.md#Workflow",
     "SKILL.md#Reference Files",
+    "SKILL.md#Findings from public H3 guides and tools",
     "references/weapon-combat-en.txt#XV",
     "references/weapon-combat-en.txt#XVI",
     "references/weapon-combat-en.txt#XX"
   ],
   "enhancer_exclude": [
     "references/wan2gp-prompts.md",
+    "references/unarmed-action-director-zh.txt",
+    "SKILL.md#Combat LoRAs in Wan2GP",
+    "SKILL.md#Automatic selection",
+    "SKILL.md#Model and sampling",
+    "SKILL.md#Weights",
+    "SKILL.md#Triggers",
+    "SKILL.md#Lessons from tested sequences",
     "SKILL.md#Pick the right line-processing mode",
     "SKILL.md#Format for the parser",
     "SKILL.md#Window commands"

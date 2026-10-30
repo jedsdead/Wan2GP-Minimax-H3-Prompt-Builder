@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [4.1.0] — 2026-10-30
+
+Checked against WanGP as of 30 October 2026 (commit a504252).
+
+- Updated the bundled H3 writing guides to the current set, including the standing rules for sequences, the
+  reference-prompt default format, unarmed and multi-opponent combat, and the 360 panorama guide. The selection
+  rules were rewritten for the new sections and the knowledge budget raised to suit them.
+- Fixed **Enhance the action** returning nothing on Ref2VA models: the writer usually answers with the whole
+  six-section prompt, and the cleanup treated `subject_definitions` as the end of the action instead of the start.
+- Fixed a duplicated `@classmethod` on `_unchanged_form`, which made every refusal path (no prompt picked, an
+  unreadable file, an unrecognised layout) raise `TypeError` instead of explaining itself.
+- The new `minimax_h3_control` family is recognised: it takes its model definition from FL2VA, so it now gets the
+  skill-guided enhancer choices and base-mode prompts.
+- `/no_end_image` is accepted as a window command, and an unrecognised command is now a warning rather than an
+  error, since a model can declare its own.
+
+## [4.0.0] — 2026-09-27
+
+- The builder now also has **its own tab**, with every option the inline copy has. On the tab the sections are
+  tabs of their own rather than folds, so there is far less scrolling.
+- The two copies keep their own fields and hand the whole form over on request: **Send these fields to the H3
+  Builder tab** at the foot of the inline copy, and **Send these fields to the inline builder** on the tab.
+  Nothing is synchronised keystroke by keystroke, so neither copy slows the other down.
+- The tab carries an editable **preview of the finished prompt**. Insert and both Append buttons fill it as
+  well as the prompt box, and **Overwrite the prompt box with this** sends an edited preview back.
+- On the tab the fields stay put under a non-H3 model, with a line saying to switch before generating; inline
+  the fold still hides itself as before.
+
 ## [3.5.2] — 2026-09-27
 
 - Fixed the `(appears in ...)` scope in retention_analysis. The shots a subject appears in were read line by

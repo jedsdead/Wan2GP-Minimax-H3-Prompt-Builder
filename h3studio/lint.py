@@ -8,7 +8,8 @@ from .modes import WINDOW_COMMAND, commands_force_new_shot
 
 BASE_FIELDS = ("integrated_multimodal_description", "overall_soundscape", "non_diegetic_music")
 REF_FIELDS = ("subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")
-KNOWN_COMMANDS = ("duration", "overlap", "new_shot", "loras_mult")
+# WanGP's own set (shared/utils/frame_scheduler.WGP_SLASH_COMMANDS); a model may add more
+KNOWN_COMMANDS = ("duration", "overlap", "new_shot", "no_end_image", "loras_mult")
 
 I2VA_LINE = re.compile(r"^For the target video, at 0\.00 seconds into the target video, <Picture 1> \(from \[Shot 1\]\) is fully referenced\.\s*$")
 FL2VA_LINE = re.compile(r"^How the reference pictures align with the target video — Picture 1 \(from Shot 1\) aligns with the 0\.00-second mark of the target video; Picture 2 \(from Shot (\d+)\) aligns with the (\d+\.\d{2})-second mark of the target video\.\s*$")
@@ -136,7 +137,10 @@ def check(prompt: str, mode: str = "auto", duration: float | None = None, expect
             for part in command.strip("[] ").split(","):
                 name = part.strip().lstrip("/").split("=")[0].strip()
                 if name and name not in KNOWN_COMMANDS:
-                    errors.append(f"{tag}unknown window command `/{name}` (Wan2GP rejects it). Known: " + ", ".join("/" + k for k in KNOWN_COMMANDS))
+                    # Models can declare their own commands, so this is a warning, not a rejection.
+                    warnings.append(f"{tag}`/{name}` is not one of Wan2GP's own window commands ("
+                                    + ", ".join("/" + k for k in KNOWN_COMMANDS)
+                                    + "); it works only if the selected model declares it.")
         if WINDOW_COMMAND.search(body):
             warnings.append(f"{tag}window commands should open the window, before any prompt text.")
         new_shot = commands_force_new_shot(commands)
@@ -161,7 +165,6 @@ def check(prompt: str, mode: str = "auto", duration: float | None = None, expect
         expected = REF_FIELDS if w_mode == "Ref2VA" else BASE_FIELDS
         order = _field_order(body)
         if not any(name in order for name in expected):
-            shots_seen = len(SHOT.findall(body))
             errors.append(f"{tag}this window is not a usable {w_mode} prompt: none of its fields "
                           f"({', '.join(expected[:2])} ...) are present"
                           + (f", and `[Shot 1]` appears {SHOT.findall(body).count('1')} times, which usually means the writer "

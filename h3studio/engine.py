@@ -17,7 +17,7 @@ import uuid
 
 from . import lint
 from .library import Library
-from .materials import Material, assign_labels, materials_block, mode_for, new_material
+from .materials import Material, materials_block, mode_for, new_material
 from .spec import window_command as spec_window_command
 from .modes import (Target, command_duration, commands_force_new_shot, detect_combat, mode_from_image_prompt_type,
                     mode_from_labels, window_commands)
@@ -28,8 +28,8 @@ DEEPY_MARK = "[Minimax H3 Prompt Generator]"
 
 DEFAULT_SETTINGS = {
     "enabled_skills": None,          # None = every skill found in skills/
-    "enhancer_budget_tokens": 10000,
-    "deepy_budget_tokens": 6000,
+    "enhancer_budget_tokens": 16000,   # the H3 guides grew; 10k no longer fits the required sections
+    "deepy_budget_tokens": 8000,
     "max_new_tokens_base": 2048,
     "max_new_tokens_ref": 3072,
     "analysis_max_tokens": 450,
@@ -64,9 +64,11 @@ def family_of(model_def: dict | None) -> str | None:
     arch = str((model_def or {}).get("architecture", ""))
     if arch.startswith("minimax_h3_ref2va"):
         return "ref2va"
-    if arch.startswith("minimax_h3_fl2va"):
+    # The control family (pose, depth, edge driving) takes its model definition
+    # from FL2VA, so it writes the same base-mode prompts.
+    if arch.startswith("minimax_h3_fl2va") or arch.startswith("minimax_h3_control"):
         return "fl2va"
-    return None   # includes minimax_h3_tts_ref2va_pruned (audio only) and viggle
+    return None   # minimax_h3_tts_ref2va_pruned is audio-only; viggle_animate ignores the prompt
 
 
 FIELD_START = r"^(summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music|integrated_multimodal_description):"
@@ -212,7 +214,7 @@ class Studio:
         if not code:
             return "none — enable a Prompt Enhancer in Configuration"
         quant = server_config.get("prompt_enhancer_quantization", "")
-        vision = "vision-capable" if code in (3, 4, 5) else "caption-based images"
+        vision = "vision-capable" if code in (3, 4, 5, 6) else "caption-based images"
         return f"local enhancer #{code}" + (f" ({quant})" if quant else "") + f", {vision}"
 
     def enhancer_available(self) -> bool:

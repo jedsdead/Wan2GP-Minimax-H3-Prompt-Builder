@@ -17,3 +17,7 @@ h3_draft.prev.json
 h3_draft.json.tmp
 prompts/
 subjects/
+
+# Written by the prompt-enhancer generator.
+cache/
+settings.json

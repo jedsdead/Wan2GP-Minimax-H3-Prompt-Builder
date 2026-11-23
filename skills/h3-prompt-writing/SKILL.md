@@ -1,6 +1,7 @@
 ---
 name: "h3-prompt-writing"
 description: "Write MiniMax H3 video prompts (T2VA, I2VA, FL2VA, L2VA, Ref2VA): structures, soundscape, music, keyframes, reference labels, 360 panoramas. Covers weapon, unarmed and one-vs-many fights, Wan2GP sliding-window sequences, the Ref2VA/RefMod subject format, and automatic per-fight-type choice of Wan2GP combat LoRAs (BUNNY Weapon Combat, Fight Flow, Combat Base V2): triggers, weights, per-window multipliers."
+routing: "Planning, reviewing or troubleshooting a MiniMax H3 video or a sliding-window sequence (when you are about to write the prompt itself, call minimax_h3_prompt_guide instead: it returns the same method narrowed to that mode, window and subject matter)"
 ---
 
 # H3 Prompt Writing
@@ -46,28 +47,31 @@ Rules the user has set for every Wan2GP sliding-window sequence. They hold
 unless the user says otherwise for a particular sequence.
 
 - **Format.** Paragraph mode, no blank lines inside a window, exactly one blank
-  line between windows, each window opening `[/duration=15s,/overlap=18]`
-  (plus `/loras_mult` only when combat LoRAs are in use; see below). The
+  line between windows, each window opening `[/duration=15s]`
+  (add `/overlap=` or `/loras_mult=` only when the user asks for them). The
   six-section layout with text-defined subjects, as in "Prompt layout tested
   with these LoRAs".
 - **First window opens on a wide shot.** Every window except the last ends on a
   wide shot with the characters still in frame and still doing something
   specific.
 - **Window openings.** `[Shot 1]` of every later window opens with "The camera
-  continues to ..." on the previous window's last shot (see "Continuations run
-  2 seconds before cutting" below), and the first cut comes at 00:02.000 or
-  later. When it cuts, use an angle clearly different from the previous
+  continues to ..." on the previous window's last shot (see "Continuation length is
+  set case by case" below). When it cuts, use an angle clearly different from the previous
   window's last shot (not the same side angle a little closer).
 - **Nothing is described at 00:15.000** (or at the window's last frame).
 - **Music** is `N/A` unless the user asks for a score; Suno scores are written
   separately.
 - **One fixed lighting description per location**, repeated identically in
   every window set there.
-- **Voices: tone only, never voice type.** Never describe what kind of voice a
-  character has (male or female, light, deep, husky, velvety, tenor). Give only
-  the tone of each line, fitting its emotion and context, and only on the line
-  where that character speaks: `<Subject 2> (S1), with an anxious, quick tone,
-  says`. Describing the voice type ("a young, light, soft-spoken male voice",
+- **Voices: every line names its speaker, gender and tone.** Every spoken
+  line, not just the first in a window, opens with the subject label, the
+  speaker ID, the character's name, their gender and the tone:
+  `<Subject 2> (S1), Darth Spite, a man speaking with a puzzled tone, says, his
+  lips moving:` ("a woman" for Siren; "boy" or "girl" where it fits the
+  character). This keeps the voices steady and removes any need for filler
+  lines, so nobody has to speak first to set the voices. Never describe what kind of voice a
+  character has (light, deep, husky, velvety, tenor), and give the tone only on
+  the line where that character speaks, fitting its emotion and context. Describing the voice type ("a young, light, soft-spoken male voice",
   repeated in shots where he did not speak) made Davin speak in Siren's voice
   from one line onward; removing the voice description fixed it. Later lines may
   still tie back with "in the same voice as his line at 00:01.200". A requested
@@ -81,15 +85,17 @@ unless the user says otherwise for a particular sequence.
 - **Dialogue window joins.** End each window on the scene's master wide shot and
   open the next by continuing that wide ("The camera continues on the same wide
   side view ... both as before, breathing, lips closed"), then cut to the
-  close-ups at 00:02.000 or later (see the next rule). Keep the
+  close-ups once the continuation has run (see the next rule). Keep the
   master's wording identical every time, and give it a new variant only when
   positions change (seated, standing, facing away).
-- **Continuations run 2 seconds before cutting.** In every continuation
+- **Continuation length is set case by case.** In every continuation
   prompt (each sliding window after the first, and any prompt that continues a
   video, in Wan2GP or the Video Editor), `[Shot 1]` continues the previous
-  shot and runs for at least 2 seconds: no cut and no spoken line before
-  00:02.000. Apply it automatically; the user should not have to ask. The
-  reason: a continuation's timestamps start at the first frame of the join,
+  shot before any cut, with no spoken line during it. How long it runs is
+  decided per sequence: at least 1.0 s always, and 2.0 s (no cut and no line
+  before 00:02.000) where a join has clipped a line or cut early. When the
+  user has not said which, ask, or state the length chosen when delivering.
+  The reason for the longer hold: a continuation's timestamps start at the first frame of the join,
   not the first new frame, and the Video Editor's masked joins lock the
   previous clip's last frames and their sound inside that start (18 frames
   between windows, often 22 between clips). A cut at 00:01.000 left about 2
@@ -97,7 +103,7 @@ unless the user says otherwise for a particular sequence.
   the line meant for 00:01.200 started inside them. Open `[Shot 1]` with "The
   camera continues ..." on the previous window's last framing and action (lips
   closed), give it one small new beat around 00:01.000 to 00:01.500 (a breath,
-  a step, a glance), then cut at 00:02.000 or later.
+  a step, a glance), then cut once the chosen hold has run.
 - **Positive phrasing only**, including in the opening description and the
   summary. "There is no fighting", "there is no dialogue", "do not engage",
   "not impressed" all count as negatives and can produce the thing they deny.
@@ -168,9 +174,11 @@ that fails before sending it:
 3. `retention_analysis` lists for each character exactly the shots that name
    them (see "Shot lists, not 'all shots'" below).
 4. Speaker IDs restart per window in order of who speaks first in that window.
-5. Every speaker's line fits its shot: estimate about 2.5 words per second, and
-   leave at least a second between a line's estimated end and the next cut to
-   anyone else.
+5. Every speaker's line fits its shot: estimate about 2.8 words per second, with
+   the line starting 0.2 s after its cut, the next cut at least 0.3 s after its
+   estimated end (same speaker) or 0.6 s (speaker changes), the last line
+   ending at least 0.5 s before the window ends, and 3 to 4 lines per 15 s
+   window.
 6. No two consecutive shots show the same subject from the same angle at only a
    different size, inside a window or across a window boundary.
 7. No negatives outside `<d>`.
@@ -204,15 +212,23 @@ that fails before sending it:
     any move into a new area a second or two in.
 21. No soundscape mentions a voice, speech, dialogue, whispering or who speaks;
     it holds ambience and specific sounds only.
-22. No line describes what kind of voice a character has; each line carries only
-    its tone (and an accent where the user asked for one).
+22. Every spoken line opens `<Subject N> (SN), <name>, a woman/man speaking
+    with a <tone> tone, says, her/his lips moving:` (and an accent where the
+    user asked for one), never a voice type, and no filler lines.
 23. Every close-up and medium close-up is at a three-quarter angle with the
     location behind, never straight front-on, when reference pictures are used.
 24. The "Only one of them speaks at a time" sentence sits in the first shot that
     has a line, never in a silent opening shot.
 25. Every continuation prompt (each window after the first, and any prompt that
     continues a video) opens with "The camera continues ..." and has no cut and
-    no spoken line before 00:02.000.
+    no spoken line before the hold chosen for that sequence (at least 1.0 s).
+26. No shot framed on one character names any other character: search the file
+    for "out of frame" and "stays silent" and replace every hit with
+    "one single figure in frame, his/hers the only face in view". The
+    "Only one of them speaks at a time" sentence appears once per window.
+27. Every character reference sheet is declared as a multi-view sheet with its
+    one-figure sentence, its features come "from one panel of <Picture N>", and
+    the retention line says the same.
 
 ## Base Modes
 
@@ -264,6 +280,15 @@ base-en's `integrated_multimodal_description` structure.
   `partially_preserved`, listing what is kept from the picture and saying the
   clothing follows the description. Leave out of the picture's list anything
   hidden in that window (a bald head under a raised hood).
+- **A character reference sheet needs its own one-figure sentence.** A
+  multi-view turnaround sheet is several copies of one person side by side, and
+  H3 will reproduce that composition as two or three of that character standing
+  together in the frame. Declare it the way a 360 panorama is declared, naming
+  what it is and ruling out its layout in the same breath:
+  `<Subject 2>: <Picture 2> is a multi-view reference sheet of one single man, providing the facial features, skin and head-tails of <Subject 2>. One single Darth Spite stands in any frame and the sheet's panel layout never appears as a frame.`
+  Then say the features come "from one panel of <Picture 2>" rather than
+  "from <Picture 2>". Ask which kind of image a reference is before writing the
+  definition; a sheet and a single portrait do not get the same sentence.
 
 ### Retention analysis
 
@@ -272,6 +297,9 @@ base-en's `integrated_multimodal_description` structure.
 - A picture is `partially_preserved` when the costume or clothing changes:
   say what is kept (face, facial features, hair, skin tone, body type) and
   what replaces the clothing. It is `fully_preserved` when nothing changes.
+- A picture that is a character reference sheet says so, so that the retention
+  line and the definition agree:
+  `<Picture 2>: partially_preserved. Spite's face, deep yellow skin and two lekku are taken from one panel of the reference sheet; his clothing follows the description.`
 - An audio is `reference`, and its line limits the voice to that one speaker:
   `<Audio N>: reference. The voice timbre, pitch and vocal character are used only for the lines spoken by <Subject N> (SN).`
 - Keep `summary` and `retention_analysis`. Whether they help is not yet
@@ -282,14 +310,30 @@ base-en's `integrated_multimodal_description` structure.
 - **Every line names the speaker, their ID and their audio**:
   `<Subject N> (SN), in the voice following <Audio N>, ...` then the delivery,
   then `<d>[English] ...</d>`. Repeat it on every line, not just the first.
-- **One speaker at a time.** With two or more speakers, say so once in the
-  first sentence of the shot where they talk ("Only one of them speaks at a
-  time; while one speaks, the other keeps her lips closed"), and after each
-  line say the other subject stays silent with lips closed.
+  Without audio references, every line still names the speaker in full:
+  `<Subject N> (SN), <name>, a woman/man speaking with a <tone> tone, says,
+  her/his lips moving:`.
+- **One speaker at a time, said once.** With two or more speakers, say so once
+  in the first sentence of the shot where they talk, phrased so that it does not
+  put the listener in the frame: "Only one of them speaks at a time, and the one
+  listening keeps their lips closed". Do not repeat it after each line.
+- **Never name an absent character in a single-character shot.** `<Subject 1>
+  out of frame` and `<Subject 1> stays silent, lips closed` tell the model she
+  is both absent and standing there with her mouth shut, and it resolves that by
+  putting a second body in the shot — wearing the appearance it has loaded for
+  the current close-up, so the speaker appears twice, the double silent and
+  blank-faced beside him. State the count positively and mention nobody else:
+  `one single figure in frame, his the only face in view`. Naming what fills the
+  space beside him helps too:
+  `the ochre tunnel walls soft and out of focus on either side of him`.
+- **An over-the-shoulder shot says what of the other person is visible.**
+  Calling him out of frame while his shoulder is at the near edge is the same
+  contradiction. Write `two people in the shot and hers the only face in view`,
+  with his shoulder and the back of his head at the near edge and his face
+  turned away from the lens.
 - **Keep the speaker's face the only face talking.** When a line falls in a
   shot framed on someone else, voices can swap from that line onward. Give
-  later lines their own shot: a medium close-up of the speaker facing the
-  camera, the other subject behind with their back turned.
+  later lines their own shot, framed on the speaker alone.
 - **Tie later lines back to the first.** From a speaker's second line on, write
   `in the same voice following <Audio N> as her line at 00:01.800`.
 
@@ -481,9 +525,9 @@ load all three in that order once. Then give each window its own multipliers
 with `[/loras_mult=...]` in that order, keeping each active LoRA at 0.25 and an
 inactive one at 0; with Two Phases add `;0` to each, for example:
 
-- weapons: `[/duration=15s,/overlap=18,/loras_mult=0.25;0 0.25;0 0]`
-- hand to hand: `[/duration=15s,/overlap=18,/loras_mult=0.25;0 0 0.25;0]`
-- no fighting: `[/duration=15s,/overlap=18,/loras_mult=0 0 0.25;0]` (or all `0`)
+- weapons: `[/duration=15s,/loras_mult=0.25;0 0.25;0 0]`
+- hand to hand: `[/duration=15s,/loras_mult=0.25;0 0 0.25;0]`
+- no fighting: `[/duration=15s,/loras_mult=0 0 0.25;0]` (or all `0`)
 
 If the user has only some of these LoRAs loaded, or a different order, follow
 what they say and drop the multipliers for missing ones. When a whole sequence
@@ -492,7 +536,7 @@ per-window override can be left out.
 
 **The user's current setup** (October 2026): only Fight Flow and Weapon Combat,
 loaded in that order, one-phase generation. Duel windows get
-`[/duration=15s,/overlap=18,/loras_mult=0.25 0.25]`, windows with no fighting
+`[/duration=15s,/loras_mult=0.25 0.25]`, windows with no fighting
 get `/loras_mult=0 0`. Fight Flow at 0.4 was tried and the user went back to
 0.25. A sequence with no fighting at all gets no `/loras_mult` and no combat
 triggers.
@@ -605,6 +649,121 @@ one. Drop combat triggers from windows with no fighting.
   choreography; strikes "toward" a body part with the block as a separate
   idea. Long, detailed descriptions of where each block sits did not beat the
   short "swings high and blocks" form inside the timed structure.
+- **Lightsaber contact flash (user's preferred look, November 2026).** Write
+  the flash as a yellow-white arc flash that lights the scene, not a plain
+  "white flash". State it once as a rule in the fight shot, naming what it
+  lights in that location: `Every contact throws a brief yellow-white arc flash
+  where the two lightsaber beams meet, strobing the mist and raking across the
+  rock and their faces.` Each exchange can then say just "in a flash". A bind
+  burns "a steady yellow-white flare" where the beams cross, and the soundscape
+  ties its crackle to "each yellow-white arc flash". Wherever this skill's
+  older examples say "white flash" or "white flare", use this wording instead.
+- **Lightsaber exchange structure (user's approved form, November 2026).** For
+  a lightsaber fight in one continuous take, write the fight shot in this order:
+  1. The framing, with each fighter's side of frame, "an arm's reach apart".
+  2. One screen-direction sentence: each fighter keeps their side of frame,
+     "always within arm's reach", and who drives whom in which direction.
+  3. The pattern rule: `Each timestamp is one complete exchange, named as
+     attack → answer: the swing and the block happen in the same moment, the
+     two red lightsaber beams meet, the impact knocks them apart, and the next
+     begins straight away.`
+  4. The flash rule from the bullet above.
+  5. One timestamp per exchange, opening with the named pair and then one
+     sentence with both fighters, the defender moving their beam to the swing:
+     `At 00:00.900, diagonal cut from high → block beside the head: <Subject 2>
+     cuts down at her shoulder and <Subject 1> raises her beam to catch it in a
+     flash.` Use "raises / drops / snaps upright ... to catch it" or "to beat
+     it aside"; add "stepping back" on some, not all.
+  6. A bind, a shove apart, and a settle into guard to finish.
+  Spacing: 1.1 s between exchanges is the approved pace (about five exchanges,
+  one dodged sweep and one bind in 10 s); 0.9 s read as slightly too fast and
+  0.65 s did not hold. Choreography rules: heights are high (head), mid (chest)
+  and low (waist), with no more than two in a row at one height; nothing is
+  blocked below the waist; the only leg attack is a low, wide sweep at knee
+  height that the defender dodges by hopping, leaping or flipping back; an
+  overhead chop is caught on a level guard above the head; vary every exchange
+  and change who attacks at least once. Keep "beam", "block" and "catch";
+  leave out "blade", "parry" and "thrust".
+  Tested and rejected in the same session, do not reintroduce: a reaction on
+  every catch ("arms give, shoulders turn"), a step for both fighters on every
+  exchange, "glides" or "slides off" wording and tilted guards (beams stick
+  together), calling the fight "a rehearsed dance" (slow), a "split second ...
+  the next swing is already coming" rule (attacker outruns the defender and
+  hits the body), naming a body part as the attacker's target ("swings at head
+  height"), bounce-and-carry momentum rules, and storyboard time ranges with a
+  list of arrow pairs but no per-exchange timestamp (swings go wide).
+- **Double lightsaber (tested November 2026, worked).** Where a fighter uses a
+  double lightsaber, keep the one-timestamp-per-exchange structure and add:
+  - *Reference and definition.* Give the weapon its own reference (the
+    character's costume-and-saber sheet) and say the picture provides "only
+    his clothing and double lightsaber hilt". In the definition: `He grips the
+    long double lightsaber hilt of <Picture 4> at its middle in both hands, a
+    red beam identical to hers extending from each end, both beams lit at all
+    times and in one straight line.`
+  - *The staff rule, once, before the exchanges:* `<Subject 2> wields his
+    double lightsaber like a bo staff: both hands on the middle of the hilt,
+    the hilt always turning, his right beam and his left beam striking or
+    blocking in turn, every block of his flowing straight into a strike with
+    the opposite beam. Both of his beams stay lit and in view for the whole
+    shot, and every contact lands on a beam, clear of the hilt and his hands.`
+  - *Alternate ends on every action.* Name the beam in each exchange and
+    strictly alternate right, left, right, left across his attacks and blocks
+    alike. Write the turn into the sentence ("the hilt turns over and his left
+    beam comes up at waist height", "the same turn whips his left beam round
+    high").
+  - *Interleave, never soak.* The opponent never attacks twice in a row: each
+    time the staff fighter blocks, his next beat is a strike with the other
+    end. A run of three attacks against him read as him standing still while
+    one beam was hit.
+  - *Blocks are upright or beside the head, on a named beam.* Leave out the
+    level overhead guard for the staff fighter, since a level hilt takes the
+    hit on its middle.
+  - *Keep both beams on.* Naming one beam per exchange made the other vanish
+    until it was used; the "both beams lit at all times" wording in the
+    definition, the staff rule, and "all three beams lit" at the open and the
+    close fixed it.
+  - *Flourishes.* One or two per sequence at most, for single or double
+    lightsabers, placed in a gap between exchanges (a full-circle spin as he
+    lands from a dodge), never in place of a block.
+  Pace tested: 0.9 s between exchanges, eight beats in 10 s including one
+  dodged sweep and a bind. This replaces the older advice to steer away from
+  double lightsabers; a single beam is still the simpler option, but the
+  double works with these rules.
+- **Dual wielding, a lightsaber in each hand (tested November 2026, worked).**
+  Build it like single-lightsaber combat fought one-handed, plus stance
+  switches. Keep the one-timestamp-per-exchange structure and add:
+  - *Definition:* `He grips one of the two matching lightsaber hilts of
+    <Picture 4> in each hand, each with a red beam identical to hers, both
+    beams lit at all times.`
+  - *The stance rule, once, before the exchanges:* `<Subject 2> fights with a
+    lightsaber in each hand, both beams lit and in view throughout, his right
+    hand always on the right hilt and his left hand always on the left hilt.
+    He stands side-on, one foot and that hand's beam forward doing the work,
+    the other beam held out low behind him, lit and in view; <Subject 1> always
+    strikes at and blocks his forward beam. He opens right foot and right beam
+    forward; each switch of stance brings the other foot and beam forward.`
+  - *Same swing rules as a single lightsaber:* the forward beam varies high,
+    mid and low over two or three exchanges (no more than two at one height),
+    overheads go on a level guard "in his left hand", the knee-height sweep is
+    dodged. Label each exchange with the beam: `high cut, right beam → block
+    beside the head`.
+  - *Stance switches bring the other lightsaber in,* back and forth, about two
+    in 10 s. They are the surprise: a step through, or a pirouette. An attacking
+    pirouette turns one full spin toward the opponent and comes out with the
+    other foot and beam forward, swinging; a defensive one turns one full spin
+    back out of reach and comes out a pace further off, blocking on the new
+    forward beam. Give a spin beat 1.0 s, the others 0.9 s.
+  - *The opponent's block of the off-hand swing is its own action:* "swings her
+    beam across to catch his left beam in a flash"; left as a plain "blocks",
+    that swing went unanswered.
+  - *Both beams together* only occasionally: a crossed X guard that catches
+    the opponent's beam in the crossing and becomes the bind, then "throws the X
+    open".
+  - *Do not write* "as with a single lightsaber" (one lightsaber vanished and
+    he went two-handed) or "held back at his hip" for the off-hand beam (it
+    disappeared behind him). Name both beams again in the closing guard.
+  - A step written into every exchange, lead foot matching the striking hand,
+    was tried first and replaced by this lead-beam model.
 - **Blades hold together only in a bind.** The constant white flare goes in the
   bind shot only. Written as a general rule ("burns for as long as they stay
   locked") it turns every clash into a lock; arm jolts and bent elbows in
@@ -657,11 +816,17 @@ one. Drop combat triggers from windows with no fighting.
   new state (unarmed, empty hand), or the prop reappears. The same goes for any
   prop picked up outside a fight (a fruit taken from a stall is slipped into a
   robe pocket, and the hands are empty from then on).
-- **Voices.** See the standing rule: tone only, never voice type. If a voice
-  still swaps at a window join, open the window with a short line from the
-  character whose voice is bleeding in, so theirs is the first voice heard (an
-  incidental "Go on." or "Mm." at 00:01.000, in their close-up); the user cuts
-  it in editing.
+- **Voices.** See the standing rule: every line names its speaker, gender and
+  tone. Filler lines to make one character speak first are no longer used.
+- **Dialogue while walking (tested November 2026, failed).** Cutting between
+  close-ups and a wide shot while two characters walk and talk made the model
+  replay the walk on every cut back to the wide (they walked up to the parapet
+  again each time), even with the camera travelling alongside and a position
+  rule in every window. A walk of twenty paces in one unbroken shot mid-window
+  also failed: one character walked off while the other stayed, and the next
+  cut put him back. Stage dialogue standing still: they arrive, stop and stay
+  put while they talk, with a position rule in every window. Move them only
+  in a window with no lines, or between scenes.
 - **Silent opening shots.** "Only one of them speaks at a time" in an opening
   shot with no dialogue produced gibberish speech there. Put that sentence in
   the first shot that has a line, and write silent shots as "walking in silence,
@@ -700,10 +865,10 @@ one. Drop combat triggers from windows with no fighting.
 - **A line must finish before the cut to someone else.** A 25-word speech given
   8 seconds, followed by a cut to the listener, put the rest of the line in the
   listener's mouth: the voice stayed right but the listener lip-synced it.
-  Budget about 2.5 words per second, split long speeches across two or three
+  Budget about 2.8 words per second, split long speeches across two or three
   shots of the same speaker from different angles (medium close-up, then over
-  the listener's shoulder), start the listener's reply at least a second after
-  the estimated end, and say at the start of the shot who speaks when: "Glory
+  the listener's shoulder), leave at least 0.6 s between the estimated end and
+  the cut to the listener, and say at the start of the shot who speaks when: "Glory
   is the only one who speaks in this video; Siren listens silently with her
   lips closed throughout", or "Siren's lips stay closed until her own single
   line at 00:11.800".
@@ -833,9 +998,8 @@ marked "to test" is not yet confirmed on the user's setup.
 - **Confirmed: a short "airlock" at window starts.** A render-tested chaining
   tool found that opening each new segment on the previous segment's exact
   arrangement for a moment, then cutting, avoided union artefacts and audio
-  clipping at joins. On the user's setup this works with the master wide held
-  to 00:02.000; see the standing rule that continuations run 2 seconds before
-  cutting.
+  clipping at joins. On the user's setup the master wide is held for 1.0 to 2.0
+  s; see the standing rule on continuation length.
 
 Sources: MiniMax-H3 official repository and its `h3-prompt-writing` skill
 (github.com/MiniMax-AI/MiniMax-H3), the official MMX CLI H3 skill
@@ -922,6 +1086,11 @@ Check these against the guides rather than from memory:
   Pedestal, Arc Shot, Tracking Shot, Static Shot and so on), optionally with
   `with small/large amplitude` and `at slow/fast speed`, written as natural
   English inside the shot rather than stacked as labels.
+- A character who appears twice in one frame is almost always a naming problem
+  rather than a reference problem: either a single-character shot names the
+  character who is not in it, or a multi-view character reference sheet was
+  declared without its one-figure sentence. Rule both out before suspecting the
+  picture itself.
 - Speaker IDs `(S1)`, `(S2)` belong only to characters who actually vocalize,
   numbered by order of vocal events. Never write them in `retention_analysis`.
 - With real reference pictures or RefMods, `retention_analysis` has one line
@@ -1033,7 +1202,7 @@ explicit continuity verb, and the choice of verb states the intent:
 
 | The window opens on | Write |
 |-|-|
-| a new shot — a cut falls on the boundary (not for the user's sequences; see the 2-second rule) | `[Shot 1] The camera cuts to a low three-quarter shot of ...` |
+| a new shot — a cut falls on the boundary (not for the user's sequences; see the continuation rule) | `[Shot 1] The camera cuts to a low three-quarter shot of ...` |
 | the previous shot, still running | `[Shot 1] The camera continues to push in ... ` |
 
 Constraints:
@@ -1159,7 +1328,7 @@ The rule of thumb:
 |-|-|
 | New angle, size or camera move, same scene | `[Shot N] At MM:SS.mmm, the camera cuts to ...` |
 | Same scene continuing across a window boundary | `[/overlap=N]`, default overlap, `[Shot 1] The camera continues to ...` |
-| A cut that falls on a window boundary | not for the user's sequences: continue for 2 seconds, then cut (`[Shot 2] At 00:02.000, the camera cuts to ...`) |
+| A cut that falls on a window boundary | not for the user's sequences: continue for the chosen hold, then cut (`[Shot 2] At 00:02.000, the camera cuts to ...`) |
 | New scene, location or time | `[/new_shot]` on that window |
 
 A ten-second window can hold four or five in-prompt cuts. Window boundaries are

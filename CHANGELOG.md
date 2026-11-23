@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [4.3.0] — 2026-11-23
+
+Checked against WanGP as of 23 November 2026, including its new user-skill feature.
+
+- Updated the bundled H3 writing guide to the current version. The reference files are unchanged and the section
+  titles the selection rules match on are unchanged, so the manifest needed no edits.
+- The bundled guide is now a listed Deepy skill. WanGP's new plugin-skill API picks up `skills/<name>/SKILL.md`
+  from every plugin folder, which is the layout this plugin already shipped, so the guide was being registered
+  but left unlisted and inert. A `routing` line in its front matter promotes it to `wangp://skills/h3-prompt-writing`,
+  so Deepy Prime and connected MCP agents can read the whole method, in any conversation, without an H3 model
+  being selected. The routing line points at `minimax_h3_prompt_guide` for the moment of writing, so the targeted
+  brief is still preferred over the whole guide.
+- Raised both knowledge budgets to 20k. The worst brief (Ref2VA sliding windows) is ~17.7k, so this is headroom
+  rather than need: at 16k Deepy's Ref2VA guidance was again losing a continuity rule as the guide grew.
+
+## [4.2.0] — 2026-11-16
+
+Checked against WanGP as of 16 November 2026.
+
+- Updated the bundled H3 writing guide to the current version (+11.6k). The reference files are unchanged; the
+  growth is in the standing rules for sequences, the pre-delivery checklist, the subject-definition, retention and
+  dialogue rules, the points most often got wrong, and the tested-sequence lessons.
+- Raised the default knowledge budgets so the larger guide still fits: 16k to 18k for the writer, 8k to 16k for
+  Deepy. At the old figures a Ref2VA sliding-window brief lost a continuity rule, and Deepy's Ref2VA guidance lost
+  the whole format spec - the sections telling it how subject_definitions, retention_analysis and the shot body are
+  written. Both now arrive complete.
+- The section titles the selection rules match on are unchanged, so the manifest needed no edits.
+
 ## [4.1.0] — 2026-10-30
 
 Checked against WanGP as of 30 October 2026 (commit a504252).

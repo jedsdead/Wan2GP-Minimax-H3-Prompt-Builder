@@ -28,8 +28,8 @@ DEEPY_MARK = "[Minimax H3 Prompt Generator]"
 
 DEFAULT_SETTINGS = {
     "enabled_skills": None,          # None = every skill found in skills/
-    "enhancer_budget_tokens": 16000,   # the H3 guides grew; 10k no longer fits the required sections
-    "deepy_budget_tokens": 8000,
+    "enhancer_budget_tokens": 20000,   # largest brief is ~17.7k (Ref2VA sliding windows); the rest is headroom for a growing guide
+    "deepy_budget_tokens": 20000,      # same: Deepy Zero cannot read skills, so its guidance must carry the whole format spec
     "max_new_tokens_base": 2048,
     "max_new_tokens_ref": 3072,
     "analysis_max_tokens": 450,

@@ -803,11 +803,20 @@ markers are pinned in every window, so a subject set to `partially_preserved` ca
 windows later. A window that comes back unusable is written again once, automatically.
 
 Drop your own `.md` or `.txt` notes into `knowledge/` to have them consulted too; anything in `knowledge/always/` is
-sent with every window. `settings.json` holds the knowledge budget if you want to tune it.
+sent with every window. `settings.json` holds the knowledge budgets (both default to 20k tokens) if you want to tune them.
 
-The plugin also adds two things outside the builder: **H3 Prompt Generator** choices in WanGP's own prompt-enhancer
-dropdown for MiniMax H3 models, and three Deepy tools (`minimax_h3_prompt_guide`, `minimax_h3_check_prompt`,
-`minimax_h3_knowledge_search`).
+The plugin also adds three things outside the builder: **H3 Prompt Generator** choices in WanGP's own prompt-enhancer
+dropdown for MiniMax H3 models, three Deepy tools (`minimax_h3_prompt_guide`, `minimax_h3_check_prompt`,
+`minimax_h3_knowledge_search`), and the bundled H3 guide as a listed Deepy skill at
+`wangp://skills/h3-prompt-writing`, which Deepy Prime and connected MCP agents can read in any conversation.
+The tools stay the better route when a prompt is actually being written: they return the same method narrowed to
+the mode, window and subject matter, where the skill is the whole guide. Deepy Zero cannot read skills at all,
+which is why the tools carry the full format spec themselves.
+
+Two notes on that skill. Its front matter is load-bearing now: WanGP parses it when the plugin loads, so a
+`name` that stops matching the folder, or a missing `---` block, would stop this plugin loading (WanGP itself
+still starts, and prints the reason). And there is no point importing the same guide into `user_skills/` through
+Configuration - Deepy would then hold it twice, once as your skill and once as this one.
 
 ## Reference slots
 
@@ -843,7 +852,7 @@ Under a model that is not MiniMax H3 the inline fold hides itself as before; the
 
 ## Compatibility
 
-Checked against WanGP as of 30 October 2026 (commit a504252): the plugin API, the prompt-enhancer entry points, the
+Checked against WanGP as of 23 November 2026 (and on 16 November, and commit a504252 on 30 October): the plugin API, the prompt-enhancer entry points, the
 H3 model definitions, the three video and three audio reference slots, and H3's window figures (107-frame minimum,
 481-frame cap, 18-frame overlap, 24 fps) all still match. The generator uses enhancer profile 8, which does not
 collide with WanGP's own profile 1 (the still-image and dialogue prompts).
